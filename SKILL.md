@@ -11,6 +11,40 @@ Only operate on the user's own local WeChat data. Do not upload decrypted databa
 
 ## Workflow
 
+Prefer the WeFlow bridge when the user already has WeFlow installed or already exported JSON from WeFlow. It avoids key capture and DB decryption. Use direct WeChat DB mode only when WeFlow is unavailable or the user needs lower-level control.
+
+## WeFlow Bridge
+
+Import a WeFlow JSON export into Obsidian:
+
+```bash
+python3 scripts/wechat2obsidian.py import-weflow-json \
+  --input ~/Downloads/weflow-export.json \
+  --vault ~/Documents/Obsidian \
+  --folder "微信渠道" \
+  --subfolder "文件传输助手"
+```
+
+Import via WeFlow's local HTTP API. First enable WeFlow Settings → API 服务, then pass the token from WeFlow or set `WEFLOW_TOKEN`:
+
+```bash
+python3 scripts/wechat2obsidian.py weflow-sessions --keyword 文件
+
+python3 scripts/wechat2obsidian.py import-weflow-api \
+  --talker filehelper \
+  --vault ~/Documents/Obsidian \
+  --folder "微信渠道" \
+  --subfolder "文件传输助手" \
+  --token "$WEFLOW_TOKEN" \
+  --media
+```
+
+The CLI auto-reads `~/Library/Application Support/weflow/WeFlow-config.json` for host, port, and token when possible. If WeFlow's token is empty, the CLI calls the local API without auth.
+
+Use `--since YYYY-MM-DD --until YYYY-MM-DD` to limit either WeFlow import path.
+
+## Direct WeChat DB Mode
+
 1. Check the local environment:
 
 ```bash
@@ -76,6 +110,8 @@ The exporter writes one Markdown file per day under `<vault>/<folder>/<subfolder
 ## Common Tasks
 
 - Export File Transfer Assistant: use `--target filehelper`.
+- Import existing WeFlow JSON: use `import-weflow-json`.
+- Import live from WeFlow local API: use `import-weflow-api`.
 - Export a friend: use the `wxid_*` target shown by `list-targets`.
 - Export a group: use the `*@chatroom` target shown by `list-targets`.
 - Limit a date range: add `--since YYYY-MM-DD --until YYYY-MM-DD`.
@@ -91,8 +127,12 @@ The exporter writes one Markdown file per day under `<vault>/<folder>/<subfolder
 
 ## References
 
-Read `references/schema-and-limits.md` only when debugging WeChat storage layout, SQLCipher decryption details, table discovery, or unsupported message/attachment cases.
+Read `references/schema-and-limits.md` only when debugging WeChat storage layout, WeFlow interop, SQLCipher decryption details, table discovery, or unsupported message/attachment cases.
+
+Read `references/upstream-projects.md` when updating credits, license notes, or upstream compatibility with Jane-xiaoer/wechat-to-obsidian, WeFlow, CipherTalk, or wx-favorites-report.
 
 ## Credits
 
 This rewrite is based on the workflow demonstrated by `Jane-xiaoer/wechat-to-obsidian` and the SQLCipher key extraction approach credited there to `zhuyansen/wx-favorites-report`. Keep those credits when redistributing derived versions.
+
+WeFlow and CipherTalk are upstream references for local WeChat export/API workflows. This skill's WeFlow bridge interoperates with their exported JSON and local HTTP API.

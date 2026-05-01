@@ -1,6 +1,8 @@
-This project is an optimized rewrite of the WeChat-to-Obsidian workflow described by:
+This project is an optimized rewrite of the WeChat-to-Obsidian workflow and local WeChat export ideas described by:
 
 - Jane-xiaoer/wechat-to-obsidian
 - zhuyansen/wx-favorites-report
+- hicccc77/WeFlow
+- ILoveBingLu/CipherTalk
 
-The SQLCipher key-capture method uses the public CCKeyDerivationPBKDF / Frida approach credited in those projects. Use this project only with WeChat data from accounts and devices you own or are explicitly authorized to process.
+The SQLCipher key-capture method uses the public CCKeyDerivationPBKDF / Frida approach credited in those projects. The WeFlow bridge is designed around exported JSON and the local HTTP API exposed by WeFlow. Use this project only with WeChat data from accounts and devices you own or are explicitly authorized to process.

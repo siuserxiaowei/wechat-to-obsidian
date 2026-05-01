@@ -10,7 +10,7 @@ Default WeChat 4.x data root:
 ~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files
 ```
 
-Each logged-in user normally appears as a `wxid_*` directory. The CLI chooses the largest user directory when more than one is present; pass `--user-dir` or `--wechat-root` when the auto choice is wrong.
+Each logged-in user normally appears as a `wxid_*` directory. The CLI chooses the largest user directory when more than one is present; pass `--base` to `locate-user` or `--wechat-root` to `export-chat` when the auto choice is wrong.
 
 Common databases:
 
@@ -75,6 +75,26 @@ WeChat content can be raw UTF-8 text, XML-like fragments, protobuf-like bytes, o
 - Cloud-only media, video-account material, some mini-program data, and CDN-only originals may not exist in local storage.
 - The exporter copies local attachment files but cannot always map every media message to a specific original file.
 - Re-sign the copied app after major WeChat upgrades or when macOS invalidates the ad-hoc signature.
+
+## WeFlow Interop
+
+WeFlow can be used as an upstream local data source when the user has it installed:
+
+- Import an exported WeFlow JSON file with `import-weflow-json`.
+- Pull data from the local WeFlow HTTP API with `import-weflow-api`.
+- List API sessions with `weflow-sessions`.
+- The API default base URL is `http://127.0.0.1:5031`.
+- The CLI auto-reads `~/Library/Application Support/weflow/WeFlow-config.json` for `httpApiHost`, `httpApiPort`, and `httpApiToken` when present.
+- If WeFlow has an access token configured, pass `--token`, set `WEFLOW_TOKEN`, or let the CLI read it from config. If the token is empty, calls are sent without auth.
+
+The importer handles these common shapes:
+
+- WeFlow HTTP `/api/v1/messages` JSON: `success`, `talker`, `messages[]`.
+- WeFlow ChatLab Pull API: `/api/v1/sessions/:id/messages`, `meta`, `members[]`, `messages[]`, `sync`.
+- WeFlow detailed JSON export: `session`, `weflow`, `avatars`, `messages[]`.
+- ChatLab-style JSON: `chatlab`, `meta`, `members[]`, `messages[]`.
+
+For redistributable code, prefer API/file interoperability over copying WeFlow or CipherTalk implementation. Both upstream projects use non-commercial Creative Commons-style licensing.
 
 ## Troubleshooting
 

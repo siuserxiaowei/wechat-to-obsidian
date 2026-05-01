@@ -87,6 +87,49 @@ class WeChatToObsidianTests(unittest.TestCase):
             self.assertEqual(manifest["message_count"], 1)
             self.assertEqual(manifest["day_files_written"], 1)
 
+    def test_import_weflow_json_writes_daily_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            media = root / "photo.jpg"
+            media.write_bytes(b"fake-jpeg")
+
+            payload = {
+                "session": {"displayName": "文件传输助手"},
+                "messages": [
+                    {
+                        "localId": 7,
+                        "createTime": int(dt.datetime(2026, 2, 3, 8, 15).timestamp()),
+                        "type": "图片消息",
+                        "senderDisplayName": "me",
+                        "content": "看这个图",
+                        "mediaLocalPath": str(media),
+                        "mediaType": "image",
+                    }
+                ],
+            }
+            input_json = root / "weflow.json"
+            input_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            code = wechat2obsidian.main([
+                "import-weflow-json",
+                "--input",
+                str(input_json),
+                "--vault",
+                str(vault),
+                "--folder",
+                "WeChat",
+            ])
+            self.assertEqual(code, 0)
+
+            md = vault / "WeChat" / "文件传输助手" / "2026-02" / "2026-02-03.md"
+            self.assertTrue(md.exists())
+            text = md.read_text(encoding="utf-8")
+            self.assertIn("看这个图", text)
+            self.assertIn("attachments/photo.jpg", text)
+            self.assertTrue((md.parent / "attachments" / "photo.jpg").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

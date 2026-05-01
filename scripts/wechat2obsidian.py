@@ -21,6 +21,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,6 +34,7 @@ IV_LEN = 16
 SQLITE_HEADER = b"SQLite format 3\x00"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "wechat-to-obsidian"
 DEFAULT_KEYS_LOG = DEFAULT_CACHE_DIR / "keys.log"
+DEFAULT_WEFLOW_CONFIG = Path.home() / "Library" / "Application Support" / "weflow" / "WeFlow-config.json"
 WECHAT_BUNDLE_ID = "com.tencent.xinWeChat"
 
 TYPE_MAP = {
@@ -681,6 +685,521 @@ def format_message(local_type: int, raw: bytes | str | None) -> str:
     return rendered or f"[类型{local_type}]"
 
 
+def message_type_label(local_type: Any, fallback: str = "") -> str:
+    try:
+        return TYPE_MAP.get(int(local_type), f"type{int(local_type)}")
+    except (TypeError, ValueError):
+        return fallback or "message"
+
+
+def parse_epoch(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        raw = int(value)
+        return raw // 1000 if raw > 10_000_000_000 else raw
+    text = str(value).strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d{10,13}", text):
+        raw = int(text)
+        return raw // 1000 if raw > 10_000_000_000 else raw
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return int(dt.datetime.strptime(text[:19], fmt).timestamp())
+        except ValueError:
+            continue
+    return None
+
+
+def parse_weflow_title(data: dict[str, Any], source_name: str = "WeFlow") -> str:
+    session = data.get("session") if isinstance(data.get("session"), dict) else {}
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    for value in (
+        session.get("displayName"),
+        session.get("nickname"),
+        session.get("remark"),
+        session.get("username"),
+        meta.get("name"),
+        meta.get("groupId"),
+        data.get("talker"),
+        source_name,
+    ):
+        if value:
+            return str(value)
+    return source_name
+
+
+def chatlab_member_map(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    members = data.get("members")
+    if not isinstance(members, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        key = member.get("platformId") or member.get("id") or member.get("accountName")
+        if key:
+            result[str(key)] = member
+    return result
+
+
+def markdown_link(title: str, url: str) -> str:
+    return f"[{title}]({url})" if title and url else url or title
+
+
+def normalize_weflow_message(message: dict[str, Any], members: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    ts = (
+        parse_epoch(message.get("createTime"))
+        or parse_epoch(message.get("timestamp"))
+        or parse_epoch(message.get("formattedTime"))
+    )
+    if ts is None:
+        return None
+
+    sender_id = message.get("senderUsername") or message.get("sender") or message.get("senderId") or ""
+    member = members.get(str(sender_id), {}) if sender_id else {}
+    sender = (
+        message.get("senderDisplayName")
+        or message.get("groupNickname")
+        or member.get("groupNickname")
+        or message.get("accountName")
+        or member.get("accountName")
+        or sender_id
+        or ("me" if message.get("isSend") in (1, True, "1", "true") else "")
+        or "unknown"
+    )
+
+    local_type = message.get("localType")
+    type_label = str(message.get("type") or message_type_label(local_type))
+    content = (
+        message.get("parsedContent")
+        or message.get("content")
+        or message.get("rawContent")
+        or ""
+    )
+
+    link_title = message.get("linkTitle") or message.get("title")
+    link_url = message.get("linkUrl") or message.get("url")
+    if link_title or link_url:
+        content = markdown_link(str(link_title or link_url), html.unescape(str(link_url or "")))
+
+    media_path = (
+        message.get("mediaLocalPath")
+        or message.get("mediaPath")
+        or message.get("localPath")
+        or ""
+    )
+    media_url = message.get("mediaUrl") or ""
+    media_type = message.get("mediaType") or ""
+
+    quoted_sender = message.get("quotedSender") or ""
+    quoted_content = message.get("quotedContent") or ""
+    if quoted_sender or quoted_content:
+        quote_lines = [f"> {quoted_sender or 'quoted'}"]
+        for line in str(quoted_content).splitlines():
+            quote_lines.append(f"> {line}")
+        content = (str(content).strip() + "\n\n" if str(content).strip() else "") + "\n".join(quote_lines)
+
+    return {
+        "create_time": ts,
+        "local_id": str(message.get("localId") or message.get("platformMessageId") or message.get("serverId") or ""),
+        "type_label": type_label,
+        "local_type": local_type,
+        "sender": str(sender),
+        "content": normalize_text_for_markdown(content),
+        "media_path": str(media_path) if media_path else "",
+        "media_url": str(media_url) if media_url else "",
+        "media_type": str(media_type) if media_type else "",
+    }
+
+
+def normalize_text_for_markdown(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def normalize_weflow_payload(data: dict[str, Any], source_name: str = "WeFlow") -> tuple[str, list[dict[str, Any]]]:
+    raw_messages = data.get("messages")
+    if not isinstance(raw_messages, list):
+        die("WeFlow JSON does not contain a messages[] array")
+    members = chatlab_member_map(data)
+    title = parse_weflow_title(data, source_name)
+    messages = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        normalized = normalize_weflow_message(item, members)
+        if normalized:
+            messages.append(normalized)
+    messages.sort(key=lambda item: (item["create_time"], item.get("local_id") or ""))
+    return title, messages
+
+
+def media_markdown(path_or_url: str, label: str = "media") -> str:
+    lower = path_or_url.lower()
+    escaped = path_or_url.replace(" ", "%20")
+    if lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic")):
+        return f"![{label}]({escaped})"
+    return f"[{label}]({escaped})"
+
+
+def copy_weflow_media(media_path: str, source_json: Path | None, month_dir: Path, used_names: set[str]) -> str:
+    if not media_path:
+        return ""
+    source = expand_path(media_path)
+    if not source.is_absolute() and source_json:
+        source = (source_json.parent / source).resolve()
+    if not source.exists() or not source.is_file():
+        return media_path
+
+    attachments = month_dir / "attachments"
+    attachments.mkdir(parents=True, exist_ok=True)
+    base = safe_segment(source.stem) + source.suffix.lower()
+    candidate = base
+    index = 2
+    while candidate in used_names or (attachments / candidate).exists():
+        candidate = f"{safe_segment(source.stem)}-{index}{source.suffix.lower()}"
+        index += 1
+    used_names.add(candidate)
+    dest = attachments / candidate
+    shutil.copy2(source, dest)
+    return str(Path("attachments") / candidate)
+
+
+def write_weflow_day_file(
+    path: Path,
+    title: str,
+    day: str,
+    messages: list[dict[str, Any]],
+    mode: str,
+) -> bool:
+    if mode == "skip" and path.exists():
+        return False
+    exported_at = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    lines = [
+        "---",
+        "source: weflow",
+        f"title: {yaml_string(title)}",
+        f"date: {yaml_string(day)}",
+        f"message_count: {len(messages)}",
+        f"exported_at: {yaml_string(exported_at)}",
+        "---",
+        "",
+        f"# {day} · {title}",
+        "",
+    ]
+    for msg in messages:
+        when = dt.datetime.fromtimestamp(msg["create_time"]).strftime("%H:%M:%S")
+        heading_bits = [when, msg.get("sender") or "unknown", msg.get("type_label") or "message"]
+        lines.append("## " + " · ".join(heading_bits))
+        lines.append("")
+        if msg.get("local_id"):
+            lines.append(f"`local_id`: {msg['local_id']}")
+            lines.append("")
+        body = msg.get("content") or ""
+        media_ref = msg.get("media_ref") or msg.get("media_url") or ""
+        if media_ref:
+            lines.append(media_markdown(media_ref, msg.get("media_type") or msg.get("type_label") or "media"))
+            lines.append("")
+        lines.append(body if body else "_(empty)_")
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return True
+
+
+def export_weflow_messages(
+    messages: list[dict[str, Any]],
+    title: str,
+    vault: Path,
+    folder: str,
+    subfolder: str | None,
+    mode: str,
+    since: str | None,
+    until: str | None,
+    source_json: Path | None = None,
+    copy_media: bool = True,
+) -> dict[str, Any]:
+    since_ts = parse_date(since) if since else None
+    until_ts = parse_date(until, exclusive_end=True) if until else None
+    if since_ts and until_ts and since_ts >= until_ts:
+        die("--since must be earlier than --until")
+
+    filtered = [
+        item for item in messages
+        if (since_ts is None or item["create_time"] >= since_ts)
+        and (until_ts is None or item["create_time"] < until_ts)
+    ]
+    out_root = safe_vault_path(vault, folder, subfolder or safe_segment(title))
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for item in filtered:
+        day = dt.datetime.fromtimestamp(item["create_time"]).strftime("%Y-%m-%d")
+        by_day.setdefault(day, []).append(dict(item))
+
+    used_media_names: set[str] = set()
+    copied_media = 0
+    for day, day_messages in by_day.items():
+        month_dir = out_root / day[:7]
+        if copy_media:
+            for msg in day_messages:
+                media_path = msg.get("media_path") or ""
+                if media_path:
+                    ref = copy_weflow_media(media_path, source_json, month_dir, used_media_names)
+                    if ref and ref != media_path:
+                        copied_media += 1
+                    msg["media_ref"] = ref
+
+    written = 0
+    skipped = 0
+    for day in sorted(by_day):
+        if write_weflow_day_file(out_root / day[:7] / f"{day}.md", title, day, by_day[day], mode):
+            written += 1
+        else:
+            skipped += 1
+
+    manifest = {
+        "source": "weflow",
+        "title": title,
+        "output": str(out_root),
+        "source_json": str(source_json) if source_json else "",
+        "exported_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "message_count": len(filtered),
+        "day_files_written": written,
+        "day_files_skipped": skipped,
+        "media_copied": copied_media,
+    }
+    (out_root / "_weflow_import_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def cmd_import_weflow_json(args: argparse.Namespace) -> int:
+    input_path = expand_path(args.input)
+    if not input_path.exists():
+        die(f"WeFlow JSON not found: {input_path}")
+    data = json.loads(input_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        die("WeFlow JSON root must be an object")
+    title, messages = normalize_weflow_payload(data, input_path.stem)
+    manifest = export_weflow_messages(
+        messages,
+        args.title or title,
+        expand_path(args.vault),
+        args.folder,
+        args.subfolder,
+        args.mode,
+        args.since,
+        args.until,
+        source_json=input_path,
+        copy_media=not args.no_media_copy,
+    )
+    if args.json:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    else:
+        info(f"Imported {manifest['message_count']} WeFlow messages")
+        info(f"day_files_written={manifest['day_files_written']} skipped={manifest['day_files_skipped']}")
+        info(f"output={manifest['output']}")
+    return 0
+
+
+def load_weflow_config(path: Path | None = None) -> dict[str, Any]:
+    config_path = path or DEFAULT_WEFLOW_CONFIG
+    if not config_path.exists():
+        return {}
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8", errors="replace"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def weflow_base_url_from_config(config: dict[str, Any]) -> str:
+    host = str(config.get("httpApiHost") or "127.0.0.1").strip() or "127.0.0.1"
+    port = config.get("httpApiPort") or 5031
+    try:
+        port_num = int(port)
+    except (TypeError, ValueError):
+        port_num = 5031
+    return f"http://{host}:{port_num}"
+
+
+def resolve_weflow_api_options(args: argparse.Namespace) -> tuple[str, str]:
+    config = load_weflow_config(expand_path(args.config) if getattr(args, "config", None) else None)
+    base_url = (
+        getattr(args, "base_url", None)
+        or os.environ.get("WEFLOW_BASE_URL")
+        or weflow_base_url_from_config(config)
+    )
+    token = (
+        getattr(args, "token", None)
+        or os.environ.get("WEFLOW_TOKEN")
+        or str(config.get("httpApiToken") or "")
+    )
+    return base_url.rstrip("/"), token
+
+
+def weflow_api_get(base_url: str, endpoint: str, params: dict[str, Any], token: str) -> dict[str, Any]:
+    clean_base = base_url.rstrip("/")
+    query = {k: v for k, v in params.items() if v not in (None, "", False)}
+    if token:
+        query["access_token"] = token
+    url = f"{clean_base}{endpoint}?{urllib.parse.urlencode(query)}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        die(f"WeFlow API HTTP {exc.code}: {body[:500]}")
+    except urllib.error.URLError as exc:
+        die(f"Cannot reach WeFlow API at {clean_base}: {exc}")
+
+
+def compact_date(value: str | None) -> str | None:
+    return value.replace("-", "") if value else None
+
+
+def fetch_weflow_messages_api(args: argparse.Namespace, base_url: str, token: str) -> tuple[str, list[dict[str, Any]]]:
+    all_messages: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        payload = weflow_api_get(
+            base_url,
+            "/api/v1/messages",
+            {
+                "talker": args.talker,
+                "limit": args.limit,
+                "offset": offset,
+                "start": compact_date(args.since),
+                "end": compact_date(args.until),
+                "media": "1" if args.media else "",
+                "image": "1" if args.media else "",
+                "voice": "1" if args.media else "",
+                "video": "1" if args.media else "",
+                "emoji": "1" if args.media else "",
+                "format": "json",
+            },
+            token,
+        )
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            die("WeFlow API response does not contain messages[]")
+        title, normalized = normalize_weflow_payload(
+            {"talker": payload.get("talker") or args.talker, "messages": messages},
+            args.talker,
+        )
+        all_messages.extend(normalized)
+        if not payload.get("hasMore") or not messages:
+            break
+        offset += len(messages)
+    return args.talker, all_messages
+
+
+def fetch_weflow_chatlab_api(args: argparse.Namespace, base_url: str, token: str) -> tuple[str, list[dict[str, Any]]]:
+    all_messages: list[dict[str, Any]] = []
+    title = args.talker
+    since_ts = parse_date(args.since) if args.since else None
+    end_ts = parse_date(args.until, exclusive_end=True) if args.until else None
+    offset = 0
+    while True:
+        endpoint = "/api/v1/sessions/" + urllib.parse.quote(args.talker, safe="") + "/messages"
+        payload = weflow_api_get(
+            base_url,
+            endpoint,
+            {
+                "since": since_ts,
+                "end": end_ts,
+                "limit": min(args.limit, 5000),
+                "offset": offset,
+            },
+            token,
+        )
+        page_title, normalized = normalize_weflow_payload(payload, args.talker)
+        title = page_title or title
+        all_messages.extend(normalized)
+        sync = payload.get("sync") if isinstance(payload.get("sync"), dict) else {}
+        if not sync.get("hasMore") or not normalized:
+            break
+        next_offset = sync.get("nextOffset")
+        try:
+            offset = int(next_offset)
+        except (TypeError, ValueError):
+            offset += len(normalized)
+    return title, all_messages
+
+
+def cmd_import_weflow_api(args: argparse.Namespace) -> int:
+    base_url, token = resolve_weflow_api_options(args)
+    if args.api_mode == "chatlab" and not args.media:
+        title, all_messages = fetch_weflow_chatlab_api(args, base_url, token)
+    else:
+        title, all_messages = fetch_weflow_messages_api(args, base_url, token)
+    all_messages.sort(key=lambda item: (item["create_time"], item.get("local_id") or ""))
+    manifest = export_weflow_messages(
+        all_messages,
+        args.title or args.subfolder or title or args.talker,
+        expand_path(args.vault),
+        args.folder,
+        args.subfolder,
+        args.mode,
+        None,
+        None,
+        source_json=None,
+        copy_media=not args.no_media_copy,
+    )
+    if args.json:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    else:
+        info(f"Imported {manifest['message_count']} messages from WeFlow API")
+        info(f"day_files_written={manifest['day_files_written']} skipped={manifest['day_files_skipped']}")
+        info(f"output={manifest['output']}")
+    return 0
+
+
+def cmd_weflow_sessions(args: argparse.Namespace) -> int:
+    base_url, token = resolve_weflow_api_options(args)
+    payload = weflow_api_get(
+        base_url,
+        "/api/v1/sessions",
+        {
+            "keyword": args.keyword,
+            "limit": args.limit,
+            "format": "chatlab" if args.chatlab else "",
+        },
+        token,
+    )
+    sessions = payload.get("sessions")
+    if not isinstance(sessions, list):
+        die("WeFlow API response does not contain sessions[]")
+    if args.json:
+        print(json.dumps(sessions, ensure_ascii=False, indent=2))
+        return 0
+    print(f"{'messages':>8}  {'id/username':<42}  name")
+    print("-" * 92)
+    for item in sessions:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("id") or item.get("username") or "")
+        name = str(item.get("name") or item.get("displayName") or "")
+        count = item.get("messageCount", "")
+        if not count and item.get("lastTimestamp"):
+            count = "-"
+        if len(sid) > 42:
+            sid = sid[:39] + "..."
+        print(f"{str(count):>8}  {sid:<42}  {name}")
+    return 0
+
+
 def parse_date(value: str, *, exclusive_end: bool = False) -> int:
     try:
         when = dt.datetime.strptime(value, "%Y-%m-%d")
@@ -1010,6 +1529,48 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--mode", choices=["overwrite", "skip"], default="overwrite", help="Daily file write mode")
     export.add_argument("--json", action="store_true", help="Print JSON summary")
     export.set_defaults(func=cmd_export_chat)
+
+    weflow_json = sub.add_parser("import-weflow-json", help="Import a WeFlow JSON export into Obsidian")
+    weflow_json.add_argument("--input", required=True, help="WeFlow JSON export path")
+    weflow_json.add_argument("--vault", required=True, help="Obsidian vault root")
+    weflow_json.add_argument("--folder", default="WeChat", help="Folder inside the vault")
+    weflow_json.add_argument("--subfolder", help="Subfolder inside --folder; defaults to session title")
+    weflow_json.add_argument("--title", help="Override note title")
+    weflow_json.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
+    weflow_json.add_argument("--until", help="Inclusive end date, YYYY-MM-DD")
+    weflow_json.add_argument("--mode", choices=["overwrite", "skip"], default="overwrite", help="Daily file write mode")
+    weflow_json.add_argument("--no-media-copy", action="store_true", help="Reference media in place instead of copying files")
+    weflow_json.add_argument("--json", action="store_true", help="Print JSON summary")
+    weflow_json.set_defaults(func=cmd_import_weflow_json)
+
+    weflow_sessions = sub.add_parser("weflow-sessions", help="List sessions from the WeFlow local HTTP API")
+    weflow_sessions.add_argument("--base-url", help="WeFlow API base URL; defaults to WeFlow config or http://127.0.0.1:5031")
+    weflow_sessions.add_argument("--token", help="WeFlow API access token; defaults to WEFLOW_TOKEN or WeFlow config")
+    weflow_sessions.add_argument("--config", help="WeFlow-config.json path")
+    weflow_sessions.add_argument("--keyword", help="Filter sessions by username or display name")
+    weflow_sessions.add_argument("--limit", type=int, default=100, help="Maximum sessions")
+    weflow_sessions.add_argument("--chatlab", action="store_true", help="Request ChatLab session format")
+    weflow_sessions.add_argument("--json", action="store_true", help="Print JSON")
+    weflow_sessions.set_defaults(func=cmd_weflow_sessions)
+
+    weflow_api = sub.add_parser("import-weflow-api", help="Import messages from the WeFlow local HTTP API")
+    weflow_api.add_argument("--talker", required=True, help="WeFlow/WeChat session id, e.g. filehelper, wxid_*, or *@chatroom")
+    weflow_api.add_argument("--vault", required=True, help="Obsidian vault root")
+    weflow_api.add_argument("--folder", default="WeChat", help="Folder inside the vault")
+    weflow_api.add_argument("--subfolder", help="Subfolder inside --folder; defaults to talker")
+    weflow_api.add_argument("--title", help="Override note title")
+    weflow_api.add_argument("--base-url", help="WeFlow API base URL; defaults to WeFlow config or http://127.0.0.1:5031")
+    weflow_api.add_argument("--token", help="WeFlow API access token; defaults to WEFLOW_TOKEN or WeFlow config")
+    weflow_api.add_argument("--config", help="WeFlow-config.json path")
+    weflow_api.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
+    weflow_api.add_argument("--until", help="Inclusive end date, YYYY-MM-DD")
+    weflow_api.add_argument("--limit", type=int, default=10000, help="Page size, max usually 10000")
+    weflow_api.add_argument("--api-mode", choices=["messages", "chatlab"], default="chatlab", help="Use WeFlow raw messages API or ChatLab pull API")
+    weflow_api.add_argument("--media", action="store_true", help="Ask WeFlow API to export/return media")
+    weflow_api.add_argument("--mode", choices=["overwrite", "skip"], default="overwrite", help="Daily file write mode")
+    weflow_api.add_argument("--no-media-copy", action="store_true", help="Reference media in place instead of copying files")
+    weflow_api.add_argument("--json", action="store_true", help="Print JSON summary")
+    weflow_api.set_defaults(func=cmd_import_weflow_api)
 
     return parser
 
