@@ -1,0 +1,4 @@
+interface:
+  display_name: "WeChat to Obsidian"
+  short_description: "Export WeChat Mac data into Obsidian"
+  default_prompt: "Use $wechat-to-obsidian to export my WeChat File Transfer messages into an Obsidian vault."

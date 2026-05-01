@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Never commit local WeChat data, decrypted databases, or captured keys.
+*.db
+*.sqlite
+*.sqlite3
+*.decrypted
+*.decrypted.db
+keys.log
+wechat_keys.log
+exports/
