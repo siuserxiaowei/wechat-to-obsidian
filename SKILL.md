@@ -1,6 +1,6 @@
 ---
 name: wechat-to-obsidian
-description: Export WeChat for macOS 4.x local data into an Obsidian vault. Use when a user wants to move WeChat File Transfer Assistant, Favorites, chats, groups, links, notes, files, screenshots, or other saved learning material from WeChat into Obsidian Markdown with attachments. Supports key capture, SQLCipher database decryption, conversation discovery, and daily Markdown export.
+description: Export WeChat for macOS 4.x local data into an Obsidian vault. Use when a user wants to move WeChat File Transfer Assistant, WeFlow exports, chats, groups, links, notes, files, screenshots, or other saved learning material from WeChat into Obsidian Markdown with attachments. Supports WeFlow JSON/API import, key capture, SQLCipher database decryption, conversation discovery, and daily Markdown export.
 ---
 
 # WeChat To Obsidian
