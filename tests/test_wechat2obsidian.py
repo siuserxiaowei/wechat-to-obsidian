@@ -130,6 +130,47 @@ class WeChatToObsidianTests(unittest.TestCase):
             self.assertIn("attachments/photo.jpg", text)
             self.assertTrue((md.parent / "attachments" / "photo.jpg").exists())
 
+    def test_import_wx_cli_json_writes_daily_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+            payload = {
+                "chat": "文件传输助手",
+                "messages": [
+                    {
+                        "timestamp": int(dt.datetime(2026, 4, 30, 21, 20).timestamp()),
+                        "time": "2026-04-30 21:20",
+                        "sender": "me",
+                        "content": "wx-cli 导入到 Obsidian",
+                        "type": "text",
+                        "local_id": 11,
+                    }
+                ],
+            }
+            input_json = root / "wx-history.json"
+            input_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            code = wechat2obsidian.main([
+                "import-wx-cli",
+                "--input-json",
+                str(input_json),
+                "--vault",
+                str(vault),
+                "--folder",
+                "WeChat",
+            ])
+            self.assertEqual(code, 0)
+
+            md = vault / "WeChat" / "文件传输助手" / "2026-04" / "2026-04-30.md"
+            self.assertTrue(md.exists())
+            text = md.read_text(encoding="utf-8")
+            self.assertIn("source: wx-cli", text)
+            self.assertIn("wx-cli 导入到 Obsidian", text)
+            manifest = json.loads((vault / "WeChat" / "文件传输助手" / "_wx_cli_import_manifest.json").read_text())
+            self.assertEqual(manifest["source"], "wx-cli")
+            self.assertEqual(manifest["message_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

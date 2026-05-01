@@ -4,8 +4,9 @@
 
 这个仓库不是一个单纯的备份脚本，而是一个面向个人知识管理的导入桥：
 
-- 从 WeFlow 导出的 JSON 导入 Obsidian。
-- 从 WeFlow 本地 HTTP API 拉取微信会话并导入 Obsidian。
+- 优先用 `jackwener/wx-cli` 读取本地微信会话并导入 Obsidian。
+- 如果 `wx-cli` 获取不到，可以用本地 `wechat-cli-pkg.tar.gz` 解压出来的 `wechat-cli` 二进制。
+- 仍支持从 WeFlow 导出的 JSON 或 WeFlow 本地 HTTP API 导入 Obsidian。
 - 在没有 WeFlow 的情况下，直接处理 macOS 微信 4.x 本地数据库，解密后导出指定聊天。
 - 把聊天按日期拆成 Markdown，并把能拿到的媒体文件放到 `attachments/`。
 
@@ -32,8 +33,8 @@
 当前是这个链路：
 
 ```text
-微信 / WeFlow
-  -> 本地导出或本地 API
+微信
+  -> wx-cli / 本地 wechat-cli 包 / WeFlow
   -> wechat2obsidian.py
   -> Obsidian vault 里的 Markdown + attachments
   -> Obsidian 搜索、标签、反链、图谱、Dataview 等能力
@@ -63,19 +64,87 @@
 - 微信本身没有保存完整原件的历史媒体。
 - WeFlow/API 没有返回本地路径的媒体文件。
 
-## 三种导入方式
+## 导入方式
 
-不是只能使用 WeFlow。这个仓库支持三种方式，只是推荐优先用 WeFlow API。
+不是只能使用 WeFlow。现在推荐优先用 `jackwener/wx-cli`，它直接从本机微信查询聊天记录，仓库再把结果写入 Obsidian。
 
-| 方式 | 适合场景 | 优点 | 代价 |
+| 方式 | 推荐度 | 适合场景 | 说明 |
 | --- | --- | --- | --- |
-| WeFlow API | 日常同步、文件传输助手、群聊/私聊持续导入 | 最省事，WeFlow 负责解密和媒体解析 | 需要打开 WeFlow API 服务 |
-| WeFlow JSON | 一次性归档、手动筛选后导入 | 不需要 API 常驻，适合离线导入 | 需要先在 WeFlow 导出 JSON |
-| 直接解微信本地库 | 不使用 WeFlow、需要底层控制 | 可直接处理 macOS 微信 4.x 本地数据库 | 需要 Frida 抓 key、解密 DB，步骤更多 |
+| wx-cli | 首选 | 日常同步、文件传输助手、群聊/私聊 | `jackwener/wx-cli` 负责读取微信记录，本仓库负责导入 Obsidian |
+| 本地 wechat-cli 包 | 备用 | `wx-cli` 装不上或获取不到时 | 使用你给的 `wechat-cli-pkg.tar.gz` 解压后的二进制 |
+| WeFlow API / JSON | 兼容 | 已经在用 WeFlow 的场景 | 继续支持，但不再是第一推荐 |
+| 直接解微信本地库 | 最后兜底 | 需要底层控制 | 需要 Frida 抓 key、解密 DB，步骤更多 |
 
-如果你本地已经装了 WeFlow，优先走 WeFlow 路线。它更稳，也省掉 Frida 抓 key 和手动解密。
+推荐顺序：
 
-### 路线 A：WeFlow 本地 API 导入，推荐
+```text
+wx-cli -> 本地 wechat-cli 包 -> WeFlow API/JSON -> 直接解微信本地库
+```
+
+### 路线 A：wx-cli 导入，推荐
+
+安装并初始化 `jackwener/wx-cli`：
+
+```bash
+npm install -g @jackwener/wx-cli
+codesign --force --deep --sign - /Applications/WeChat.app
+killall WeChat && open /Applications/WeChat.app
+sudo wx init
+```
+
+确认能列出会话：
+
+```bash
+python3 scripts/wechat2obsidian.py wx-sessions --limit 100
+```
+
+导入文件传输助手：
+
+```bash
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "文件传输助手" \
+  --since 2026-01-01 \
+  --until 2026-05-01 \
+  --media
+```
+
+导入某个群聊：
+
+```bash
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat "群名称或 chatroom id" \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "重要群聊/群名" \
+  --since 2026-04-01 \
+  --until 2026-05-01
+```
+
+### 路线 B：本地 wechat-cli 包导入，备用
+
+如果 `wx-cli` 获取不到，就用你本地的包：
+
+```bash
+tar -xzf /Users/siuserxiaowei/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_276exkqyuyd422_20a2/msg/file/2026-04/wechat-cli-pkg.tar.gz -C /tmp/wechat-cli-pkg
+```
+
+导入：
+
+```bash
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --binary /tmp/wechat-cli-pkg/wechat-cli-pkg/wechat-cli/node_modules/@canghe_ai/wechat-cli-darwin-arm64/bin/wechat-cli \
+  --chat "群名称或文件传输助手" \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "wx-cli导入" \
+  --since 2026-04-01 \
+  --until 2026-05-01
+```
+
+### 路线 C：WeFlow 本地 API 导入，兼容
 
 1. 打开 WeFlow。
 2. 进入设置，开启 `API 服务`。
@@ -149,7 +218,7 @@ Obsidian Vault/
         └── _weflow_import_manifest.json
 ```
 
-### 路线 B：导入 WeFlow 导出的 JSON
+### 路线 D：导入 WeFlow 导出的 JSON
 
 如果你已经在 WeFlow 里导出了 JSON 文件：
 
@@ -163,7 +232,7 @@ python3 scripts/wechat2obsidian.py import-weflow-json \
 
 这条路线适合一次性导入，也适合你先在 WeFlow 里筛选/导出，再进 Obsidian。
 
-### 路线 C：不用 WeFlow，直接解微信本地库
+### 路线 E：不用 wx-cli/WeFlow，直接解微信本地库
 
 这条路线更底层，适合 WeFlow 不可用或你想直接处理 macOS 微信 4.x 本地数据库。
 
@@ -263,12 +332,12 @@ docs/Obsidian-微信资料库配置.md
 # 检查环境
 python3 scripts/wechat2obsidian.py doctor
 
-# 列 WeFlow 会话
-python3 scripts/wechat2obsidian.py weflow-sessions --limit 100
+# 列 wx-cli 会话
+python3 scripts/wechat2obsidian.py wx-sessions --limit 100
 
-# 从 WeFlow API 导入文件传输助手
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker filehelper \
+# 从 wx-cli 导入文件传输助手
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
@@ -286,13 +355,14 @@ python3 scripts/wechat2obsidian.py import-weflow-json \
 - 只处理你自己的微信数据。
 - 不要把 key log、解密后的数据库、聊天附件上传到公开仓库。
 - `.gitignore` 已经默认排除数据库、key log、导出目录等敏感文件。
-- WeFlow 路线优先，因为它能复用本地应用已经做好的解密、媒体解析和 API 能力。
+- 优先使用 `jackwener/wx-cli`，避免自己维护 Frida 抓 key 和数据库解密链路。
 
 ## 参考项目
 
 这个项目参考和吸收了这些公开项目的思路：
 
 - `Jane-xiaoer/wechat-to-obsidian`
+- `jackwener/wx-cli`
 - `zhuyansen/wx-favorites-report`
 - `hicccc77/WeFlow`
 - `ILoveBingLu/CipherTalk`

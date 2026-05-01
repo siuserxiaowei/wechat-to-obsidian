@@ -144,6 +144,31 @@ def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def infer_wx_cli_kind(binary: str) -> str:
+    name = Path(binary).name
+    return "wx" if name == "wx" or name.startswith("wx.") else "wechat-cli"
+
+
+def resolve_wx_cli(cli: str = "auto", binary: str | None = None) -> tuple[str, str]:
+    if binary:
+        path = expand_path(binary)
+        if not path.exists():
+            die(f"wx-cli binary not found: {path}")
+        return infer_wx_cli_kind(str(path)), str(path)
+
+    if cli != "auto":
+        found = shutil.which(cli)
+        if not found:
+            die(f"Command not found: {cli}")
+        return cli, found
+
+    for candidate in ("wx", "wechat-cli"):
+        found = shutil.which(candidate)
+        if found:
+            return candidate, found
+    die("Command not found: wx or wechat-cli. Install @jackwener/wx-cli, or pass --binary to the local wechat-cli package.")
+
+
 def find_wechat_app() -> Path | None:
     for candidate in (
         Path("/Applications/WeChat.app"),
@@ -704,7 +729,7 @@ def parse_epoch(value: Any) -> int | None:
     if re.fullmatch(r"\d{10,13}", text):
         raw = int(text)
         return raw // 1000 if raw > 10_000_000_000 else raw
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
         try:
             return int(dt.datetime.strptime(text[:19], fmt).timestamp())
         except ValueError:
@@ -839,6 +864,100 @@ def normalize_weflow_payload(data: dict[str, Any], source_name: str = "WeFlow") 
     return title, messages
 
 
+def load_json_maybe_wrapped(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        starts = [idx for idx in (text.find("{"), text.find("[")) if idx >= 0]
+        ends = [idx for idx in (text.rfind("}"), text.rfind("]")) if idx >= 0]
+        if not starts or not ends:
+            raise
+        return json.loads(text[min(starts): max(ends) + 1])
+
+
+def wx_cli_message_array(data: Any) -> tuple[str, list[dict[str, Any]]]:
+    if isinstance(data, list):
+        return "wx-cli", [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        die("wx-cli JSON root must be an object or array")
+
+    title = str(
+        data.get("chat")
+        or data.get("name")
+        or data.get("display_name")
+        or data.get("title")
+        or "wx-cli"
+    )
+    for key_path in (
+        ("messages",),
+        ("data", "messages"),
+        ("result", "messages"),
+        ("history", "messages"),
+    ):
+        cursor: Any = data
+        for key in key_path:
+            cursor = cursor.get(key) if isinstance(cursor, dict) else None
+        if isinstance(cursor, list):
+            return title, [item for item in cursor if isinstance(item, dict)]
+    die("wx-cli JSON does not contain messages[]")
+
+
+def normalize_wx_cli_payload(data: Any, source_name: str = "wx-cli") -> tuple[str, list[dict[str, Any]]]:
+    title, raw_messages = wx_cli_message_array(data)
+    if title == "wx-cli":
+        title = source_name
+
+    messages: list[dict[str, Any]] = []
+    for item in raw_messages:
+        ts = (
+            parse_epoch(item.get("timestamp"))
+            or parse_epoch(item.get("create_time"))
+            or parse_epoch(item.get("time_ts"))
+            or parse_epoch(item.get("time"))
+            or parse_epoch(item.get("datetime"))
+        )
+        if ts is None:
+            continue
+
+        sender = (
+            item.get("sender")
+            or item.get("sender_name")
+            or item.get("from")
+            or item.get("from_name")
+            or item.get("talker")
+            or "unknown"
+        )
+        content = item.get("content") or item.get("text") or item.get("message") or ""
+        if isinstance(content, (dict, list)):
+            content = json.dumps(content, ensure_ascii=False, indent=2)
+        type_label = str(item.get("type") or item.get("msg_type") or item.get("local_type") or "message")
+        media_path = (
+            item.get("media_path")
+            or item.get("mediaPath")
+            or item.get("local_path")
+            or item.get("localPath")
+            or item.get("file_path")
+            or item.get("filePath")
+            or ""
+        )
+        media_url = item.get("media_url") or item.get("url") or ""
+
+        messages.append({
+            "create_time": ts,
+            "local_id": str(item.get("local_id") or item.get("id") or ""),
+            "type_label": type_label,
+            "local_type": item.get("local_type"),
+            "sender": str(sender),
+            "content": normalize_text_for_markdown(content),
+            "media_path": str(media_path) if media_path else "",
+            "media_url": str(media_url) if media_url else "",
+            "media_type": type_label,
+        })
+
+    messages.sort(key=lambda item: (item["create_time"], item.get("local_id") or ""))
+    return title, messages
+
+
 def media_markdown(path_or_url: str, label: str = "media") -> str:
     lower = path_or_url.lower()
     escaped = path_or_url.replace(" ", "%20")
@@ -876,13 +995,14 @@ def write_weflow_day_file(
     day: str,
     messages: list[dict[str, Any]],
     mode: str,
+    source_label: str = "weflow",
 ) -> bool:
     if mode == "skip" and path.exists():
         return False
     exported_at = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     lines = [
         "---",
-        "source: weflow",
+        f"source: {source_label}",
         f"title: {yaml_string(title)}",
         f"date: {yaml_string(day)}",
         f"message_count: {len(messages)}",
@@ -923,6 +1043,8 @@ def export_weflow_messages(
     until: str | None,
     source_json: Path | None = None,
     copy_media: bool = True,
+    source_label: str = "weflow",
+    manifest_name: str = "_weflow_import_manifest.json",
 ) -> dict[str, Any]:
     since_ts = parse_date(since) if since else None
     until_ts = parse_date(until, exclusive_end=True) if until else None
@@ -958,13 +1080,13 @@ def export_weflow_messages(
     written = 0
     skipped = 0
     for day in sorted(by_day):
-        if write_weflow_day_file(out_root / day[:7] / f"{day}.md", title, day, by_day[day], mode):
+        if write_weflow_day_file(out_root / day[:7] / f"{day}.md", title, day, by_day[day], mode, source_label):
             written += 1
         else:
             skipped += 1
 
     manifest = {
-        "source": "weflow",
+        "source": source_label,
         "title": title,
         "output": str(out_root),
         "source_json": str(source_json) if source_json else "",
@@ -974,7 +1096,7 @@ def export_weflow_messages(
         "day_files_skipped": skipped,
         "media_copied": copied_media,
     }
-    (out_root / "_weflow_import_manifest.json").write_text(
+    (out_root / manifest_name).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -1161,6 +1283,110 @@ def cmd_import_weflow_api(args: argparse.Namespace) -> int:
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
     else:
         info(f"Imported {manifest['message_count']} messages from WeFlow API")
+        info(f"day_files_written={manifest['day_files_written']} skipped={manifest['day_files_skipped']}")
+        info(f"output={manifest['output']}")
+    return 0
+
+
+def run_wx_cli_json(args: argparse.Namespace, command: str) -> Any:
+    kind, executable = resolve_wx_cli(getattr(args, "cli", "auto"), getattr(args, "binary", None))
+    if command == "sessions":
+        if kind == "wx":
+            cmd = [executable, "sessions", "-n", str(args.limit), "--json"]
+        else:
+            cmd = [executable, "sessions", "--limit", str(args.limit), "--format", "json"]
+    else:
+        if kind == "wx":
+            cmd = [executable, "history", args.chat, "-n", str(args.limit), "--json"]
+            if args.since:
+                cmd.extend(["--since", args.since])
+            if args.until:
+                cmd.extend(["--until", args.until])
+            if getattr(args, "media", False):
+                cmd.append("--media")
+        else:
+            cmd = [executable, "history", args.chat, "--limit", str(args.limit), "--format", "json"]
+            if args.since:
+                cmd.extend(["--start-time", args.since])
+            if args.until:
+                cmd.extend(["--end-time", args.until])
+            if getattr(args, "media", False):
+                cmd.append("--media")
+
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        die(
+            "wx-cli command failed:\n"
+            + " ".join(cmd)
+            + "\n\nSTDOUT:\n"
+            + result.stdout
+            + "\nSTDERR:\n"
+            + result.stderr
+        )
+    if getattr(args, "raw_output", None):
+        raw_path = expand_path(args.raw_output)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(result.stdout, encoding="utf-8")
+    return load_json_maybe_wrapped(result.stdout)
+
+
+def cmd_wx_sessions(args: argparse.Namespace) -> int:
+    data = run_wx_cli_json(args, "sessions")
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    sessions = data.get("sessions") if isinstance(data, dict) else data
+    if not isinstance(sessions, list):
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    print(f"{'unread':>8}  {'id/username':<42}  name")
+    print("-" * 92)
+    for item in sessions:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("username") or item.get("id") or item.get("chat") or "")
+        name = str(item.get("chat") or item.get("name") or item.get("display_name") or item.get("summary") or "")
+        unread = item.get("unread", "")
+        if len(sid) > 42:
+            sid = sid[:39] + "..."
+        print(f"{str(unread):>8}  {sid:<42}  {name}")
+    return 0
+
+
+def cmd_import_wx_cli(args: argparse.Namespace) -> int:
+    if args.input_json:
+        input_path = expand_path(args.input_json)
+        if not input_path.exists():
+            die(f"wx-cli JSON not found: {input_path}")
+        data = load_json_maybe_wrapped(input_path.read_text(encoding="utf-8"))
+        source_json: Path | None = input_path
+        source_name = input_path.stem
+    else:
+        if not args.chat:
+            die("--chat is required unless --input-json is provided")
+        data = run_wx_cli_json(args, "history")
+        source_json = None
+        source_name = args.chat
+
+    title, messages = normalize_wx_cli_payload(data, source_name)
+    manifest = export_weflow_messages(
+        messages,
+        args.title or args.subfolder or title or args.chat or "wx-cli",
+        expand_path(args.vault),
+        args.folder,
+        args.subfolder,
+        args.mode,
+        args.since,
+        args.until,
+        source_json=source_json,
+        copy_media=not args.no_media_copy,
+        source_label="wx-cli",
+        manifest_name="_wx_cli_import_manifest.json",
+    )
+    if args.json:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    else:
+        info(f"Imported {manifest['message_count']} messages from wx-cli")
         info(f"day_files_written={manifest['day_files_written']} skipped={manifest['day_files_skipped']}")
         info(f"output={manifest['output']}")
     return 0
@@ -1571,6 +1797,33 @@ def build_parser() -> argparse.ArgumentParser:
     weflow_api.add_argument("--no-media-copy", action="store_true", help="Reference media in place instead of copying files")
     weflow_api.add_argument("--json", action="store_true", help="Print JSON summary")
     weflow_api.set_defaults(func=cmd_import_weflow_api)
+
+    wx_sessions = sub.add_parser("wx-sessions", help="List sessions from jackwener/wx-cli or local wechat-cli")
+    wx_sessions.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="CLI command to use")
+    wx_sessions.add_argument("--binary", help="Explicit wx/wechat-cli binary path")
+    wx_sessions.add_argument("--limit", type=int, default=100, help="Maximum sessions")
+    wx_sessions.add_argument("--raw-output", help="Save raw CLI JSON output")
+    wx_sessions.add_argument("--json", action="store_true", help="Print JSON")
+    wx_sessions.set_defaults(func=cmd_wx_sessions)
+
+    wx_cli = sub.add_parser("import-wx-cli", help="Import messages from jackwener/wx-cli or local wechat-cli into Obsidian")
+    wx_cli.add_argument("--chat", help="Chat/group name or id; required unless --input-json is used")
+    wx_cli.add_argument("--input-json", help="Existing wx-cli/wechat-cli history JSON file")
+    wx_cli.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="CLI command to use")
+    wx_cli.add_argument("--binary", help="Explicit wx/wechat-cli binary path")
+    wx_cli.add_argument("--vault", required=True, help="Obsidian vault root")
+    wx_cli.add_argument("--folder", default="WeChat", help="Folder inside the vault")
+    wx_cli.add_argument("--subfolder", help="Subfolder inside --folder; defaults to chat title")
+    wx_cli.add_argument("--title", help="Override note title")
+    wx_cli.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
+    wx_cli.add_argument("--until", help="Inclusive end date, YYYY-MM-DD")
+    wx_cli.add_argument("--limit", type=int, default=5000, help="Maximum messages to read")
+    wx_cli.add_argument("--media", action="store_true", help="Ask CLI to resolve media paths when supported")
+    wx_cli.add_argument("--mode", choices=["overwrite", "skip"], default="overwrite", help="Daily file write mode")
+    wx_cli.add_argument("--no-media-copy", action="store_true", help="Reference media in place instead of copying files")
+    wx_cli.add_argument("--raw-output", help="Save raw CLI JSON output")
+    wx_cli.add_argument("--json", action="store_true", help="Print JSON summary")
+    wx_cli.set_defaults(func=cmd_import_wx_cli)
 
     return parser
 

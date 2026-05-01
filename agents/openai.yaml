@@ -1,4 +1,4 @@
 interface:
   display_name: "WeChat to Obsidian"
-  short_description: "Export WeChat Mac data into Obsidian"
-  default_prompt: "Use $wechat-to-obsidian to export my WeChat File Transfer messages into an Obsidian vault."
+  short_description: "Use wx-cli to export WeChat chats into Obsidian Markdown"
+  default_prompt: "Use $wechat-to-obsidian to export my WeChat messages into an Obsidian vault. Prefer jackwener/wx-cli with import-wx-cli. If wx is unavailable, use the local wechat-cli package via --binary. Use WeFlow only as a compatibility path."

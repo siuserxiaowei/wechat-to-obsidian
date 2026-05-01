@@ -1,138 +1,116 @@
 ---
 name: wechat-to-obsidian
-description: Export WeChat for macOS 4.x local data into an Obsidian vault. Use when a user wants to move WeChat File Transfer Assistant, WeFlow exports, chats, groups, links, notes, files, screenshots, or other saved learning material from WeChat into Obsidian Markdown with attachments. Supports WeFlow JSON/API import, key capture, SQLCipher database decryption, conversation discovery, and daily Markdown export.
+description: Export WeChat local data into an Obsidian vault. Prefer jackwener/wx-cli for chat history, with local wechat-cli package fallback, then WeFlow JSON/API, then direct database decryption.
 ---
 
 # WeChat To Obsidian
 
-Use this skill to move data from a user's own WeChat for macOS 4.x account into an Obsidian vault. The bundled CLI is `scripts/wechat2obsidian.py`.
+Use this skill to move the user's own WeChat chats, File Transfer Assistant, links, files, screenshots, and learning material into an Obsidian vault as Markdown with attachments. The CLI is `scripts/wechat2obsidian.py`.
 
-Only operate on the user's own local WeChat data. Do not upload decrypted databases, key logs, attachments, or exported vault contents to third-party services.
+Only operate on the user's own local WeChat data. Do not upload decrypted databases, key logs, attachments, raw CLI output, or exported vault contents to third-party services.
 
-## Workflow
+## Preferred Workflow
 
-Prefer the WeFlow bridge when the user already has WeFlow installed or already exported JSON from WeFlow. It avoids key capture and DB decryption. Use direct WeChat DB mode only when WeFlow is unavailable or the user needs lower-level control.
+Use this order:
 
-## WeFlow Bridge
+1. `jackwener/wx-cli`
+2. Local `wechat-cli-pkg.tar.gz` binary via `--binary`
+3. WeFlow JSON/API
+4. Direct WeChat DB mode
 
-Import a WeFlow JSON export into Obsidian:
+## wx-cli Route
+
+Install and initialize:
+
+```bash
+npm install -g @jackwener/wx-cli
+codesign --force --deep --sign - /Applications/WeChat.app
+killall WeChat && open /Applications/WeChat.app
+sudo wx init
+```
+
+List sessions:
+
+```bash
+python3 scripts/wechat2obsidian.py wx-sessions --limit 100
+```
+
+Import File Transfer Assistant:
+
+```bash
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
+  --vault ~/Documents/Obsidian \
+  --folder "微信渠道" \
+  --subfolder "文件传输助手" \
+  --since YYYY-MM-DD \
+  --until YYYY-MM-DD \
+  --media
+```
+
+Import a group or friend:
+
+```bash
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat "群名称或 wxid/chatroom id" \
+  --vault ~/Documents/Obsidian \
+  --folder "微信渠道" \
+  --subfolder "重要群聊/群名"
+```
+
+## Local wechat-cli Package Fallback
+
+If `wx` is unavailable, unpack the user-provided package and pass the binary:
+
+```bash
+tar -xzf /path/to/wechat-cli-pkg.tar.gz -C /tmp/wechat-cli-pkg
+
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --binary /tmp/wechat-cli-pkg/wechat-cli-pkg/wechat-cli/node_modules/@canghe_ai/wechat-cli-darwin-arm64/bin/wechat-cli \
+  --chat "群名称或文件传输助手" \
+  --vault ~/Documents/Obsidian \
+  --folder "微信渠道" \
+  --subfolder "wechat-cli导入"
+```
+
+## WeFlow Compatibility
+
+Import WeFlow JSON:
 
 ```bash
 python3 scripts/wechat2obsidian.py import-weflow-json \
   --input ~/Downloads/weflow-export.json \
   --vault ~/Documents/Obsidian \
-  --folder "微信渠道" \
-  --subfolder "文件传输助手"
+  --folder "微信渠道"
 ```
 
-Import via WeFlow's local HTTP API. First enable WeFlow Settings → API 服务, then pass the token from WeFlow or set `WEFLOW_TOKEN`:
+Import via WeFlow local API:
 
 ```bash
 python3 scripts/wechat2obsidian.py weflow-sessions --keyword 文件
-
 python3 scripts/wechat2obsidian.py import-weflow-api \
   --talker filehelper \
   --vault ~/Documents/Obsidian \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
-  --token "$WEFLOW_TOKEN" \
   --media
 ```
 
-The CLI auto-reads `~/Library/Application Support/weflow/WeFlow-config.json` for host, port, and token when possible. If WeFlow's token is empty, the CLI calls the local API without auth.
+## Direct DB Fallback
 
-Use `--since YYYY-MM-DD --until YYYY-MM-DD` to limit either WeFlow import path.
-
-## Direct WeChat DB Mode
-
-1. Check the local environment:
-
-```bash
-python3 scripts/wechat2obsidian.py doctor
-```
-
-2. Install runtime dependencies if needed:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-3. Create an ad-hoc signed WeChat copy. Re-run this after major WeChat upgrades:
-
-```bash
-python3 scripts/wechat2obsidian.py sign-wechat \
-  --dest ~/Desktop/WeChat-Obsidian.app
-```
-
-4. Capture SQLCipher keys while opening the target WeChat surfaces. For file transfer exports, open "文件传输助手"; for favorites, open "收藏"; for a group or friend, open that conversation:
-
-```bash
-python3 scripts/wechat2obsidian.py capture-keys \
-  --wechat-app ~/Desktop/WeChat-Obsidian.app \
-  --launch \
-  --wait 300
-```
-
-Captured logs default to `~/.cache/wechat-to-obsidian/keys.log` and contain only salts and derived encryption keys.
-
-5. Decrypt the message database:
-
-```bash
-USER_DIR=$(python3 scripts/wechat2obsidian.py locate-user --print-path)
-
-python3 scripts/wechat2obsidian.py decrypt \
-  --db "$USER_DIR/db_storage/message/message_0.db" \
-  --out /tmp/message_0.decrypted.db
-```
-
-6. Discover exportable chat targets:
-
-```bash
-python3 scripts/wechat2obsidian.py list-targets \
-  --db /tmp/message_0.decrypted.db \
-  --limit 50
-```
-
-7. Export to Obsidian:
-
-```bash
-python3 scripts/wechat2obsidian.py export-chat \
-  --db /tmp/message_0.decrypted.db \
-  --target filehelper \
-  --vault ~/Documents/Obsidian \
-  --folder "微信渠道" \
-  --subfolder "文件传输助手" \
-  --with-senders
-```
-
-The exporter writes one Markdown file per day under `<vault>/<folder>/<subfolder>/<YYYY-MM>/`, copies monthly attachments into `attachments/`, and writes `_export_manifest.json`.
+Use direct DB mode only when wx-cli/wechat-cli/WeFlow cannot satisfy the task. It requires signing WeChat, capturing keys, decrypting `message_*.db`, discovering targets, and exporting.
 
 ## Common Tasks
 
-- Export File Transfer Assistant: use `--target filehelper`.
-- Import existing WeFlow JSON: use `import-weflow-json`.
-- Import live from WeFlow local API: use `import-weflow-api`.
-- Export a friend: use the `wxid_*` target shown by `list-targets`.
-- Export a group: use the `*@chatroom` target shown by `list-targets`.
-- Limit a date range: add `--since YYYY-MM-DD --until YYYY-MM-DD`.
-- Skip attachment copying: add `--no-attachments`.
-- Keep existing daily files untouched: add `--mode skip`.
-
-## Safety Defaults
-
-- Key capture omits raw PBKDF passwords and creates key logs with `0600` permissions.
-- Export paths are forced to stay inside the specified Obsidian vault.
-- Existing Markdown files are overwritten only by default deterministic export behavior; use `--mode skip` to preserve them.
-- Attachment copying preserves relative paths to avoid filename collisions.
+- List wx-cli sessions: `wx-sessions`.
+- Import from wx-cli: `import-wx-cli`.
+- Import from existing wx-cli JSON: `import-wx-cli --input-json history.json`.
+- Import existing WeFlow JSON: `import-weflow-json`.
+- Import live from WeFlow local API: `import-weflow-api`.
+- Keep edited daily files: add `--mode skip`.
 
 ## References
 
-Read `references/schema-and-limits.md` only when debugging WeChat storage layout, WeFlow interop, SQLCipher decryption details, table discovery, or unsupported message/attachment cases.
+Read `references/schema-and-limits.md` only when debugging WeChat storage layout, wx-cli/WeFlow interop, SQLCipher decryption details, table discovery, or unsupported message/attachment cases.
 
-Read `references/upstream-projects.md` when updating credits, license notes, or upstream compatibility with Jane-xiaoer/wechat-to-obsidian, WeFlow, CipherTalk, or wx-favorites-report.
-
-## Credits
-
-This rewrite is based on the workflow demonstrated by `Jane-xiaoer/wechat-to-obsidian` and the SQLCipher key extraction approach credited there to `zhuyansen/wx-favorites-report`. Keep those credits when redistributing derived versions.
-
-WeFlow and CipherTalk are upstream references for local WeChat export/API workflows. This skill's WeFlow bridge interoperates with their exported JSON and local HTTP API.
+Read `references/upstream-projects.md` when updating credits, license notes, or upstream compatibility with Jane-xiaoer/wechat-to-obsidian, jackwener/wx-cli, WeFlow, CipherTalk, or wx-favorites-report.

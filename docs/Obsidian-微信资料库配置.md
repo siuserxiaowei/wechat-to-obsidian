@@ -19,8 +19,8 @@ updated: 2026-05-01
 当前方案不是 Obsidian 插件自动同步，而是：
 
 ```text
-微信 / WeFlow
-  -> 本地 API 或 JSON 导出
+微信
+  -> wx-cli / 本地 wechat-cli 包 / WeFlow
   -> WeChat Obsidian Bridge
   -> Obsidian Vault 里的 Markdown + attachments
 ```
@@ -100,25 +100,68 @@ Obsidian Vault/
 
 如果你的 Vault 名字不同，把后面命令里的 `--vault` 改成真实路径。
 
-## 三种导入方式
+## 导入方式
 
-不是只能使用 WeFlow。当前支持三种方式：
+不是只能使用 WeFlow。现在推荐优先使用 `jackwener/wx-cli` 获取微信聊天记录；获取不到时再用你本地的 `wechat-cli-pkg.tar.gz`。
 
-| 方式 | 适合场景 | 优点 | 代价 |
+| 方式 | 推荐度 | 适合场景 | 说明 |
 | --- | --- | --- | --- |
-| WeFlow API | 日常同步、文件传输助手、群聊/私聊持续导入 | 最省事，WeFlow 负责解密和媒体解析 | 需要打开 WeFlow API 服务 |
-| WeFlow JSON | 一次性归档、手动筛选后导入 | 不需要 API 常驻，适合离线导入 | 需要先在 WeFlow 导出 JSON |
-| 直接解微信本地库 | 不使用 WeFlow、需要底层控制 | 可直接处理 macOS 微信 4.x 本地数据库 | 需要 Frida 抓 key、解密 DB，步骤更多 |
+| wx-cli | 首选 | 日常同步、文件传输助手、群聊/私聊 | `jackwener/wx-cli` 负责读取本地微信记录 |
+| 本地 wechat-cli 包 | 备用 | `wx-cli` 获取不到时 | 用 `wechat-cli-pkg.tar.gz` 解压出的二进制 |
+| WeFlow API / JSON | 兼容 | 已经在用 WeFlow | 仍可用，但不作为第一推荐 |
+| 直接解微信本地库 | 兜底 | 需要底层控制 | 需要 Frida 抓 key、解密 DB |
 
 推荐顺序：
 
 ```text
-WeFlow API -> WeFlow JSON -> 直接解微信本地库
+wx-cli -> 本地 wechat-cli 包 -> WeFlow API/JSON -> 直接解微信本地库
 ```
 
-## WeFlow 设置
+## wx-cli 设置，推荐
 
-推荐优先使用 WeFlow，因为它已经处理了很多微信本地数据读取、媒体解析和 API 输出。
+安装：
+
+```bash
+npm install -g @jackwener/wx-cli
+```
+
+macOS 首次初始化：
+
+```bash
+codesign --force --deep --sign - /Applications/WeChat.app
+killall WeChat && open /Applications/WeChat.app
+sudo wx init
+```
+
+进入项目目录：
+
+```bash
+cd /Users/siuserxiaowei/Desktop/dont哥\ 对谈/wechat-to-obsidian
+```
+
+列出会话：
+
+```bash
+python3 scripts/wechat2obsidian.py wx-sessions --limit 100
+```
+
+## 本地 wechat-cli 包，备用
+
+如果 `wx-cli` 获取不到，用本地包：
+
+```bash
+tar -xzf /Users/siuserxiaowei/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_276exkqyuyd422_20a2/msg/file/2026-04/wechat-cli-pkg.tar.gz -C /tmp/wechat-cli-pkg
+```
+
+后面命令加：
+
+```bash
+--binary /tmp/wechat-cli-pkg/wechat-cli-pkg/wechat-cli/node_modules/@canghe_ai/wechat-cli-darwin-arm64/bin/wechat-cli
+```
+
+## WeFlow 设置，兼容
+
+如果你已经在用 WeFlow，可以继续使用 WeFlow API 或 JSON 导入。
 
 在 WeFlow 里打开：
 
@@ -156,13 +199,13 @@ cd /Users/siuserxiaowei/Desktop/dont哥\ 对谈/wechat-to-obsidian
 python3 scripts/wechat2obsidian.py doctor
 ```
 
-列出 WeFlow 会话：
+列出 wx-cli 会话：
 
 ```bash
-python3 scripts/wechat2obsidian.py weflow-sessions --limit 100
+python3 scripts/wechat2obsidian.py wx-sessions --limit 100
 ```
 
-搜索文件传输助手：
+如果要走 WeFlow 兼容路线，再列 WeFlow 会话：
 
 ```bash
 python3 scripts/wechat2obsidian.py weflow-sessions --keyword 文件
@@ -179,24 +222,23 @@ python3 scripts/wechat2obsidian.py weflow-sessions --keyword 关键词
 最推荐先导入文件传输助手，因为大量学习资料、链接、截图和临时文件都在这里。
 
 ```bash
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker filehelper \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
   --media
 ```
 
-如果 WeFlow 配了 token：
+如果使用本地 wechat-cli 包：
 
 ```bash
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker filehelper \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --binary /tmp/wechat-cli-pkg/wechat-cli-pkg/wechat-cli/node_modules/@canghe_ai/wechat-cli-darwin-arm64/bin/wechat-cli \
+  --chat filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
-  --subfolder "文件传输助手" \
-  --token "填入 WeFlow Token" \
-  --media
+  --subfolder "文件传输助手"
 ```
 
 ## 按时间范围导入
@@ -204,8 +246,8 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 导入 2026 年以来的文件传输助手：
 
 ```bash
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker filehelper \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
@@ -218,10 +260,10 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 
 ## 导入某个群聊
 
-先查群聊 ID：
+先查群聊：
 
 ```bash
-python3 scripts/wechat2obsidian.py weflow-sessions --keyword 群名
+python3 scripts/wechat2obsidian.py wx-sessions --limit 100
 ```
 
 假设查到的 talker 是：
@@ -233,8 +275,8 @@ python3 scripts/wechat2obsidian.py weflow-sessions --keyword 群名
 导入：
 
 ```bash
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker "123456789@chatroom" \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat "群名称或 123456789@chatroom" \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "重要群聊/群名" \
@@ -246,7 +288,7 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 先查好友：
 
 ```bash
-python3 scripts/wechat2obsidian.py weflow-sessions --keyword 好友备注
+python3 scripts/wechat2obsidian.py wx-sessions --limit 100
 ```
 
 假设查到的 talker 是：
@@ -258,8 +300,8 @@ wxid_xxxxx
 导入：
 
 ```bash
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker "wxid_xxxxx" \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat "好友备注或 wxid_xxxxx" \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "私聊/好友备注" \
@@ -375,7 +417,7 @@ python3 scripts/wechat2obsidian.py export-chat \
   --with-senders
 ```
 
-这条路线不依赖 WeFlow，但要处理 Frida、key、SQLCipher 和微信本地库。除非你明确不想用 WeFlow，否则日常使用仍然建议走 WeFlow API。
+这条路线不依赖 wx-cli 或 WeFlow，但要处理 Frida、key、SQLCipher 和微信本地库。除非你明确需要底层控制，否则日常使用仍然建议走 wx-cli。
 
 ## 导入后是什么样
 
@@ -390,7 +432,7 @@ python3 scripts/wechat2obsidian.py export-chat \
     ├── 2026-02/
     │   ├── 2026-02-18.md
     │   └── attachments/
-    └── _weflow_import_manifest.json
+    └── _wx_cli_import_manifest.json
 ```
 
 每天一个 Markdown 文件。
@@ -436,7 +478,7 @@ python3 scripts/wechat2obsidian.py export-chat \
 ```dataview
 TABLE date, message_count, exported_at
 FROM "微信渠道"
-WHERE source = "weflow" OR source = "wechat"
+WHERE source = "wx-cli" OR source = "weflow" OR source = "wechat"
 SORT exported_at DESC
 LIMIT 30
 ```
@@ -456,7 +498,7 @@ LIMIT 30
 ```dataview
 TABLE date, message_count
 FROM "微信渠道/文件传输助手"
-WHERE source = "weflow" OR source = "wechat"
+WHERE source = "wx-cli" OR source = "weflow" OR source = "wechat"
 SORT date DESC
 LIMIT 50
 ```
@@ -466,7 +508,7 @@ LIMIT 50
 ```dataview
 LIST
 FROM "微信渠道"
-WHERE source = "weflow" OR source = "wechat"
+WHERE source = "wx-cli" OR source = "weflow" OR source = "wechat"
 SORT file.name DESC
 LIMIT 30
 ```
@@ -507,8 +549,8 @@ path:"微信渠道" 2026-05-01
 
 ### 每天或每周同步一次
 
-1. 打开 WeFlow。
-2. 开启 API 服务。
+1. 打开微信桌面版。
+2. 确认 `wx sessions` 或 `wechat2obsidian.py wx-sessions` 能看到会话。
 3. 运行文件传输助手导入命令。
 4. 打开 Obsidian。
 5. 在 `微信渠道/文件传输助手` 查看新增记录。
@@ -519,8 +561,8 @@ path:"微信渠道" 2026-05-01
 把日期改成最近一周：
 
 ```bash
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker filehelper \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
@@ -540,8 +582,8 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 完整示例：
 
 ```bash
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker filehelper \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
@@ -578,7 +620,7 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 
 ### 能看到聊天文件吗？
 
-能看到本地可拿到的文件。WeFlow 或微信本地没有缓存的云端文件，不一定能拿到。
+能看到本地可拿到的文件。wx-cli / WeFlow / 微信本地都拿不到的云端文件，不一定能导入。
 
 ### 能看到图片、语音、视频吗？
 
@@ -586,7 +628,7 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 
 ### 能导入所有群聊吗？
 
-可以逐个导入。先用 `weflow-sessions` 找 talker，再对每个 talker 跑 `import-weflow-api`。
+可以逐个导入。先用 `wx-sessions` 确认会话，再对每个会话跑 `import-wx-cli`。
 
 ### 能实时同步吗？
 
@@ -594,30 +636,30 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 
 ### 微信收藏可以直接导入吗？
 
-当前推荐通过 WeFlow 或聊天记录中的收藏/转发内容导入。直接解析 `favorite.db` 是后续增强项。
+当前推荐通过 wx-cli 聊天记录中的收藏/转发内容导入；如果你已有 WeFlow 收藏导出，也可以走 WeFlow。直接解析 `favorite.db` 是后续增强项。
 
 ### 为什么有些图片不显示？
 
 常见原因：
 
-- WeFlow 没有返回本地媒体路径。
+- wx-cli / WeFlow 没有返回本地媒体路径。
 - 原图没有缓存到本机。
 - 文件在微信缓存里已经被清理。
 - Obsidian 中附件相对路径被移动。
 
-### 为什么 API 连接不上？
+### 为什么 wx-cli 读取不到？
 
 检查：
 
 ```bash
-python3 scripts/wechat2obsidian.py weflow-sessions --limit 10
+python3 scripts/wechat2obsidian.py wx-sessions --limit 10
 ```
 
 如果失败：
 
-1. 确认 WeFlow 正在运行。
-2. 确认 WeFlow 设置里开启了 API 服务。
-3. 确认端口是 `5031`。
+1. 确认微信桌面版已经登录。
+2. 确认已经运行 `sudo wx init`。
+3. 如果 `wx` 装不上，改用 `wechat-cli-pkg.tar.gz` 的 `--binary` 备用路线。
 4. 如果设置了 Token，命令里加 `--token`。
 
 ## 一键命令模板
@@ -627,8 +669,8 @@ python3 scripts/wechat2obsidian.py weflow-sessions --limit 10
 ```bash
 cd /Users/siuserxiaowei/Desktop/dont哥\ 对谈/wechat-to-obsidian
 
-python3 scripts/wechat2obsidian.py import-weflow-api \
-  --talker filehelper \
+python3 scripts/wechat2obsidian.py import-wx-cli \
+  --chat filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
@@ -640,7 +682,7 @@ python3 scripts/wechat2obsidian.py import-weflow-api \
 ```bash
 cd /Users/siuserxiaowei/Desktop/dont哥\ 对谈/wechat-to-obsidian
 
-python3 scripts/wechat2obsidian.py weflow-sessions --limit 200
+python3 scripts/wechat2obsidian.py wx-sessions --limit 200
 ```
 
 ## 后续升级方向
