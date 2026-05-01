@@ -9,6 +9,20 @@
 - 在没有 WeFlow 的情况下，直接处理 macOS 微信 4.x 本地数据库，解密后导出指定聊天。
 - 把聊天按日期拆成 Markdown，并把能拿到的媒体文件放到 `attachments/`。
 
+## 截图预览
+
+下面是示意截图，内容使用的是示例数据，不包含真实聊天隐私。
+
+![三条导入路线总览](assets/screenshots/01-overview.png)
+
+![WeFlow API 导入流程](assets/screenshots/02-weflow-api.png)
+
+![不用 WeFlow 的直接解库流程](assets/screenshots/03-direct-db.png)
+
+![导入到 Obsidian 后的效果](assets/screenshots/04-obsidian-result.png)
+
+![三种方式对比](assets/screenshots/05-route-comparison.png)
+
 ## 你想要的效果
 
 ### 1. 把 Obsidian 跟微信聊天记录打通
@@ -49,7 +63,15 @@
 - 微信本身没有保存完整原件的历史媒体。
 - WeFlow/API 没有返回本地路径的媒体文件。
 
-## 推荐路线
+## 三种导入方式
+
+不是只能使用 WeFlow。这个仓库支持三种方式，只是推荐优先用 WeFlow API。
+
+| 方式 | 适合场景 | 优点 | 代价 |
+| --- | --- | --- | --- |
+| WeFlow API | 日常同步、文件传输助手、群聊/私聊持续导入 | 最省事，WeFlow 负责解密和媒体解析 | 需要打开 WeFlow API 服务 |
+| WeFlow JSON | 一次性归档、手动筛选后导入 | 不需要 API 常驻，适合离线导入 | 需要先在 WeFlow 导出 JSON |
+| 直接解微信本地库 | 不使用 WeFlow、需要底层控制 | 可直接处理 macOS 微信 4.x 本地数据库 | 需要 Frida 抓 key、解密 DB，步骤更多 |
 
 如果你本地已经装了 WeFlow，优先走 WeFlow 路线。它更稳，也省掉 Frida 抓 key 和手动解密。
 

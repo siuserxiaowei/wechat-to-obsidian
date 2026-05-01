@@ -27,6 +27,20 @@ updated: 2026-05-01
 
 导入完成后，Obsidian 会把微信资料当成普通 Markdown 笔记处理，可以搜索、链接、打标签、做 Dataview 查询。
 
+## 截图总览
+
+下面是示意截图，内容使用示例数据，不包含真实聊天隐私。
+
+![三条导入路线总览](https://raw.githubusercontent.com/siuserxiaowei/wechat-to-obsidian/main/assets/screenshots/01-overview.png)
+
+![WeFlow API 导入流程](https://raw.githubusercontent.com/siuserxiaowei/wechat-to-obsidian/main/assets/screenshots/02-weflow-api.png)
+
+![不用 WeFlow 的直接解库流程](https://raw.githubusercontent.com/siuserxiaowei/wechat-to-obsidian/main/assets/screenshots/03-direct-db.png)
+
+![导入到 Obsidian 后的效果](https://raw.githubusercontent.com/siuserxiaowei/wechat-to-obsidian/main/assets/screenshots/04-obsidian-result.png)
+
+![三种方式对比](https://raw.githubusercontent.com/siuserxiaowei/wechat-to-obsidian/main/assets/screenshots/05-route-comparison.png)
+
 ## 目标效果
 
 - 在 Obsidian 中查看微信文件传输助手内容。
@@ -85,6 +99,22 @@ Obsidian Vault/
 ```
 
 如果你的 Vault 名字不同，把后面命令里的 `--vault` 改成真实路径。
+
+## 三种导入方式
+
+不是只能使用 WeFlow。当前支持三种方式：
+
+| 方式 | 适合场景 | 优点 | 代价 |
+| --- | --- | --- | --- |
+| WeFlow API | 日常同步、文件传输助手、群聊/私聊持续导入 | 最省事，WeFlow 负责解密和媒体解析 | 需要打开 WeFlow API 服务 |
+| WeFlow JSON | 一次性归档、手动筛选后导入 | 不需要 API 常驻，适合离线导入 | 需要先在 WeFlow 导出 JSON |
+| 直接解微信本地库 | 不使用 WeFlow、需要底层控制 | 可直接处理 macOS 微信 4.x 本地数据库 | 需要 Frida 抓 key、解密 DB，步骤更多 |
+
+推荐顺序：
+
+```text
+WeFlow API -> WeFlow JSON -> 直接解微信本地库
+```
 
 ## WeFlow 设置
 
@@ -249,6 +279,103 @@ python3 scripts/wechat2obsidian.py import-weflow-json \
 ```
 
 适合一次性导入、归档导入、手动筛选导入。
+
+## 不用 WeFlow：直接解微信本地库
+
+如果你不想使用 WeFlow，也可以直接处理 macOS 微信 4.x 本地数据库。
+
+这条路线更底层，步骤更多：
+
+```text
+签名微信副本 -> Frida 抓 key -> 解密 message_0.db -> 找会话 -> 导出 Obsidian
+```
+
+安装依赖：
+
+```bash
+cd /Users/siuserxiaowei/Desktop/dont哥\ 对谈/wechat-to-obsidian
+
+python3 -m pip install -r requirements.txt
+```
+
+检查环境：
+
+```bash
+python3 scripts/wechat2obsidian.py doctor
+```
+
+签名一个可被 Frida attach 的微信副本：
+
+```bash
+python3 scripts/wechat2obsidian.py sign-wechat \
+  --dest ~/Desktop/WeChat-Obsidian.app
+```
+
+抓取数据库 key：
+
+```bash
+python3 scripts/wechat2obsidian.py capture-keys \
+  --wechat-app ~/Desktop/WeChat-Obsidian.app \
+  --launch \
+  --wait 300
+```
+
+抓 key 时，在微信里打开你要导出的聊天，例如：
+
+```text
+文件传输助手
+某个好友
+某个群聊
+收藏
+```
+
+定位微信用户目录：
+
+```bash
+USER_DIR=$(python3 scripts/wechat2obsidian.py locate-user --print-path)
+```
+
+解密消息库：
+
+```bash
+python3 scripts/wechat2obsidian.py decrypt \
+  --db "$USER_DIR/db_storage/message/message_0.db" \
+  --out /tmp/message_0.decrypted.db
+```
+
+列出可导出的会话：
+
+```bash
+python3 scripts/wechat2obsidian.py list-targets \
+  --db /tmp/message_0.decrypted.db \
+  --limit 100
+```
+
+导出文件传输助手：
+
+```bash
+python3 scripts/wechat2obsidian.py export-chat \
+  --db /tmp/message_0.decrypted.db \
+  --target filehelper \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "文件传输助手" \
+  --with-senders
+```
+
+导出某个好友或群聊：
+
+```bash
+python3 scripts/wechat2obsidian.py export-chat \
+  --db /tmp/message_0.decrypted.db \
+  --target "wxid_xxxxx 或 123456789@chatroom" \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "私聊或群聊名称" \
+  --with-senders
+```
+
+这条路线不依赖 WeFlow，但要处理 Frida、key、SQLCipher 和微信本地库。除非你明确不想用 WeFlow，否则日常使用仍然建议走 WeFlow API。
 
 ## 导入后是什么样
 
