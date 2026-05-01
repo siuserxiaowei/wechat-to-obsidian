@@ -216,6 +216,16 @@ python3 scripts/wechat2obsidian.py export-chat \
 5. 链接类消息会尽量渲染成 Markdown 链接。
 6. 你可以用 Obsidian 全文搜索、标签、反链、图谱、Dataview 等插件继续整理。
 
+## Obsidian 配置文档
+
+已经准备了一份可以直接放进 Obsidian 的配置手册：
+
+```text
+docs/Obsidian-微信资料库配置.md
+```
+
+里面包含推荐目录、WeFlow 设置、导入命令、Dataview 查询、搜索语法、日常同步流程和排错清单。
+
 ## 当前不是 Obsidian 插件
 
 这点很重要：
