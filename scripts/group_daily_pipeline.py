@@ -9,13 +9,19 @@ optionally commit the generated report HTML/PNG to a GitHub Pages repository.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
+import hashlib
+import hmac
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +39,10 @@ def die(message: str) -> None:
 
 def info(message: str) -> None:
     print(f"[*] {message}", flush=True)
+
+
+def warn(message: str) -> None:
+    print(f"[!] {message}", file=sys.stderr, flush=True)
 
 
 def expand(path: str | Path) -> Path:
@@ -81,6 +91,27 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def resolve_value(config: dict[str, Any], key: str, env_key: str, default_env: str = "") -> str:
+    value = str(config.get(key) or "").strip()
+    if value.startswith("$"):
+        return os.environ.get(value[1:], "")
+    if value:
+        return value
+    env_name = str(config.get(env_key) or default_env).strip()
+    return os.environ.get(env_name, "") if env_name else ""
+
+
+def post_json(url: str, payload: dict[str, Any]) -> None:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        response.read()
+
+
 def load_config(path: Path | None) -> dict[str, Any]:
     if not path:
         return {}
@@ -90,6 +121,28 @@ def load_config(path: Path | None) -> dict[str, Any]:
     if not isinstance(data, dict):
         die("Pipeline config root must be an object")
     return data
+
+
+def load_env_file(path_value: str | None) -> None:
+    if not path_value:
+        return
+    path = repo_relative_path(path_value)
+    if not path.exists():
+        warn(f"Env file not found, skipped: {path}")
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):].strip()
+        if "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def normalize_groups(args: argparse.Namespace, config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -320,7 +373,7 @@ def update_publish_index(publish_repo: Path, base_url: str | None) -> None:
 
 
 def publish_report(publish: dict[str, Any], slug: str, day: str, html_path: Path, png_path: Path | None) -> str:
-    repo = expand(publish.get("repo", ""))
+    repo = repo_relative_path(str(publish.get("repo", "")))
     if not repo:
         return ""
     if not repo.exists():
@@ -342,6 +395,92 @@ def publish_report(publish: dict[str, Any], slug: str, day: str, html_path: Path
     return f"{base_url}/reports/{slug}/{day}/" if base_url else str(dest / "index.html")
 
 
+def notification_text(day: str, summaries: list[dict[str, Any]]) -> str:
+    lines = [
+        f"微信群日报已生成: {day}",
+        "",
+        f"群数量: {len(summaries)}",
+    ]
+    for index, item in enumerate(summaries, 1):
+        count = item.get("message_count", 0)
+        active = item.get("active_user_count", 0)
+        time_range = item.get("time_range") or "无活跃时段"
+        link = item.get("publish_url") or item.get("report_html") or ""
+        lines.extend([
+            "",
+            f"{index}. {item.get('title', '未命名群')}",
+            f"消息: {count} 条 / 活跃成员: {active} 人 / 时段: {time_range}",
+            f"日报: {link}",
+        ])
+    return "\n".join(lines)
+
+
+def send_telegram(telegram: dict[str, Any], text: str) -> None:
+    if not telegram.get("enabled"):
+        return
+    token = resolve_value(telegram, "bot_token", "bot_token_env", "TELEGRAM_BOT_TOKEN")
+    chat_id = resolve_value(telegram, "chat_id", "chat_id_env", "TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        warn("Telegram notify skipped: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or fill notify.telegram in config.")
+        return
+    try:
+        post_json(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": text[:3900],
+                "disable_web_page_preview": False,
+            },
+        )
+        info("Telegram notification sent")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        warn(f"Telegram notify failed: {exc}")
+
+
+def feishu_sign(secret: str, timestamp: str) -> str:
+    string_to_sign = f"{timestamp}\n{secret}"
+    digest = hmac.new(secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("utf-8")
+
+
+def send_feishu(feishu: dict[str, Any], text: str) -> None:
+    if not feishu.get("enabled"):
+        return
+    webhook_url = resolve_value(feishu, "webhook_url", "webhook_url_env", "FEISHU_WEBHOOK_URL")
+    secret = resolve_value(feishu, "secret", "secret_env", "FEISHU_WEBHOOK_SECRET")
+    if not webhook_url:
+        warn("Feishu notify skipped: set FEISHU_WEBHOOK_URL, or fill notify.feishu.webhook_url in config.")
+        return
+
+    payload: dict[str, Any] = {
+        "msg_type": "text",
+        "content": {"text": text},
+    }
+    if secret:
+        timestamp = str(int(time.time()))
+        payload["timestamp"] = timestamp
+        payload["sign"] = feishu_sign(secret, timestamp)
+
+    try:
+        post_json(webhook_url, payload)
+        info("Feishu notification sent")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        warn(f"Feishu notify failed: {exc}")
+
+
+def send_notifications(config: dict[str, Any], day: str, summaries: list[dict[str, Any]]) -> None:
+    notify = config.get("notify")
+    if not isinstance(notify, dict):
+        return
+    text = notification_text(day, summaries)
+    telegram = notify.get("telegram")
+    if isinstance(telegram, dict):
+        send_telegram(telegram, text)
+    feishu = notify.get("feishu")
+    if isinstance(feishu, dict):
+        send_feishu(feishu, text)
+
+
 def run_group(day: str, group: dict[str, Any], args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     chat = str(group.get("chat") or "")
     input_json = group.get("input_json")
@@ -360,7 +499,7 @@ def run_group(day: str, group: dict[str, Any], args: argparse.Namespace, config:
     obsidian_dir = vault / folder / subfolder / month
     obsidian_dir.mkdir(parents=True, exist_ok=True)
 
-    daily_repo = expand(str(group.get("daily_report_repo") or DEFAULT_DAILY_REPORT_REPO))
+    daily_repo = repo_relative_path(str(group.get("daily_report_repo") or DEFAULT_DAILY_REPORT_REPO))
     if not (daily_repo / "scripts" / "generate_report.py").exists():
         die(f"Daily report repo not found or incomplete: {daily_repo}")
 
@@ -425,13 +564,13 @@ def run_group(day: str, group: dict[str, Any], args: argparse.Namespace, config:
         str(simplified_txt),
     ], cwd=daily_repo)
 
+    stats_for_summary = load_json(stats_json)
     ai_mode = str(group.get("ai_mode") or "heuristic")
     if group.get("ai_content"):
         shutil.copy2(expand(str(group["ai_content"])), ai_content_json)
     elif ai_mode == "heuristic":
-        stats = load_json(stats_json)
         simplified = simplified_txt.read_text(encoding="utf-8")
-        write_json(ai_content_json, heuristic_ai_content(stats, simplified))
+        write_json(ai_content_json, heuristic_ai_content(stats_for_summary, simplified))
     else:
         die(f"Unsupported ai_mode={ai_mode!r}. Use heuristic or provide ai_content.")
 
@@ -493,6 +632,9 @@ def run_group(day: str, group: dict[str, Any], args: argparse.Namespace, config:
         "chat": chat or str(input_json),
         "title": title,
         "date": day,
+        "message_count": stats_for_summary.get("meta", {}).get("total_count", 0),
+        "active_user_count": stats_for_summary.get("meta", {}).get("active_user_count", 0),
+        "time_range": stats_for_summary.get("meta", {}).get("time_range", ""),
         "obsidian_dir": str(obsidian_dir),
         "report_html": str(report_html_final),
         "report_png": str(report_png_final) if report_png_final else "",
@@ -529,11 +671,13 @@ def main() -> int:
     args = build_parser().parse_args()
     day = parse_day(args.date)
     config = load_config(expand(args.config) if args.config else None)
+    load_env_file(config.get("env_file"))
     groups = normalize_groups(args, config)
     summaries = []
     for group in groups:
         merged = merge_group(config, group, args)
         summaries.append(run_group(day, merged, args, config))
+    send_notifications(config, day, summaries)
     if args.json:
         print(json.dumps({"date": day, "reports": summaries}, ensure_ascii=False, indent=2))
     else:

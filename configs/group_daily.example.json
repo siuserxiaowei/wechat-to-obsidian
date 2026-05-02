@@ -4,10 +4,23 @@
   "daily_report_repo": "../wechat-daily-report-skill",
   "work_dir": ".daily-pipeline",
   "ai_mode": "heuristic",
+  "env_file": "configs/group_daily.env",
   "publish": {
-    "repo": "",
-    "base_url": "",
-    "push": false
+    "repo": "../wechat-daily-report-skill",
+    "base_url": "https://your-name.github.io/wechat-daily-report-skill",
+    "push": true
+  },
+  "notify": {
+    "telegram": {
+      "enabled": false,
+      "bot_token_env": "TELEGRAM_BOT_TOKEN",
+      "chat_id_env": "TELEGRAM_CHAT_ID"
+    },
+    "feishu": {
+      "enabled": false,
+      "webhook_url_env": "FEISHU_WEBHOOK_URL",
+      "secret_env": "FEISHU_WEBHOOK_SECRET"
+    }
   },
   "groups": [
     {

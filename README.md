@@ -393,6 +393,47 @@ python3 scripts/group_daily_pipeline.py \
 }
 ```
 
+发布后的路径固定是：
+
+```text
+https://你的用户名.github.io/你的仓库/reports/<群slug>/<日期>/
+```
+
+如果要在跑完后同步提醒飞书和 Telegram，复制本地环境变量样例：
+
+```bash
+cp configs/group_daily.env.example configs/group_daily.env
+```
+
+编辑 `configs/group_daily.env`，填入：
+
+```bash
+TELEGRAM_BOT_TOKEN=你的 Telegram Bot Token
+TELEGRAM_CHAT_ID=你的 Telegram Chat ID
+FEISHU_WEBHOOK_URL=你的飞书自定义机器人 Webhook
+FEISHU_WEBHOOK_SECRET=飞书机器人签名密钥，可选
+```
+
+然后在 `configs/group_daily.json` 里保留 `env_file` 并打开通知：
+
+```json
+"env_file": "configs/group_daily.env",
+"notify": {
+  "telegram": {
+    "enabled": true,
+    "bot_token_env": "TELEGRAM_BOT_TOKEN",
+    "chat_id_env": "TELEGRAM_CHAT_ID"
+  },
+  "feishu": {
+    "enabled": true,
+    "webhook_url_env": "FEISHU_WEBHOOK_URL",
+    "secret_env": "FEISHU_WEBHOOK_SECRET"
+  }
+}
+```
+
+通知内容只包含日期、群名、消息数、活跃人数和日报链接，不会把原始聊天内容发到 IM。
+
 本机每天早上自动跑，建议用 Codex 自动任务或系统定时任务执行：
 
 ```bash

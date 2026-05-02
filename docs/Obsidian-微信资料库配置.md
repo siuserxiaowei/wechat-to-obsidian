@@ -581,6 +581,50 @@ cp configs/group_daily.example.json configs/group_daily.json
 python3 scripts/group_daily_pipeline.py --config configs/group_daily.json --date yesterday
 ```
 
+配置里可以同时打开 GitHub Pages 发布和 IM 提醒：
+
+```json
+"publish": {
+  "repo": "/Users/siuserxiaowei/Desktop/dont哥 对谈/wechat-daily-report-skill",
+  "base_url": "https://siuserxiaowei.github.io/wechat-daily-report-skill",
+  "push": true
+},
+"env_file": "configs/group_daily.env",
+"notify": {
+  "telegram": {
+    "enabled": true,
+    "bot_token_env": "TELEGRAM_BOT_TOKEN",
+    "chat_id_env": "TELEGRAM_CHAT_ID"
+  },
+  "feishu": {
+    "enabled": true,
+    "webhook_url_env": "FEISHU_WEBHOOK_URL",
+    "secret_env": "FEISHU_WEBHOOK_SECRET"
+  }
+}
+```
+
+需要复制本地环境变量文件并填入机器人配置：
+
+```bash
+cp configs/group_daily.env.example configs/group_daily.env
+```
+
+```bash
+TELEGRAM_BOT_TOKEN=你的 Telegram Bot Token
+TELEGRAM_CHAT_ID=你的 Telegram Chat ID
+FEISHU_WEBHOOK_URL=你的飞书自定义机器人 Webhook
+FEISHU_WEBHOOK_SECRET=飞书机器人签名密钥，可选
+```
+
+日报会同步到：
+
+```text
+https://siuserxiaowei.github.io/wechat-daily-report-skill/reports/<群slug>/<日期>/
+```
+
+飞书和 Telegram 只接收生成结果摘要与链接，不接收完整聊天记录。
+
 ### 每天或每周同步一次
 
 1. 打开微信桌面版。
