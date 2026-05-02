@@ -39,6 +39,11 @@ def expand(path: str | Path) -> Path:
     return Path(path).expanduser()
 
 
+def repo_relative_path(value: str | Path) -> Path:
+    path = expand(value)
+    return path if path.is_absolute() else ROOT / path
+
+
 def safe_slug(value: str) -> str:
     cleaned = re.sub(r"[^\w\u4e00-\u9fff.-]+", "-", value, flags=re.UNICODE).strip("-_.")
     return cleaned or "wechat-group"
@@ -359,7 +364,7 @@ def run_group(day: str, group: dict[str, Any], args: argparse.Namespace, config:
     if not (daily_repo / "scripts" / "generate_report.py").exists():
         die(f"Daily report repo not found or incomplete: {daily_repo}")
 
-    work_root = expand(str(group.get("work_dir") or DEFAULT_WORK_DIR)) / day / slug
+    work_root = repo_relative_path(str(group.get("work_dir") or DEFAULT_WORK_DIR)) / day / slug
     work_root.mkdir(parents=True, exist_ok=True)
     raw_json = work_root / f"{day}-wx-history.json"
     stats_json = work_root / "stats.json"
