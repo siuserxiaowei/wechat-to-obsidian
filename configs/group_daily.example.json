@@ -1,0 +1,22 @@
+{
+  "vault": "~/Documents/Obsidian Vault",
+  "folder": "微信渠道",
+  "daily_report_repo": "../wechat-daily-report-skill",
+  "work_dir": ".daily-pipeline",
+  "ai_mode": "heuristic",
+  "publish": {
+    "repo": "",
+    "base_url": "",
+    "push": false
+  },
+  "groups": [
+    {
+      "chat": "付费群名称",
+      "title": "付费群名称",
+      "slug": "paid-group",
+      "subfolder": "付费群/付费群名称",
+      "limit": 5000,
+      "media": false
+    }
+  ]
+}

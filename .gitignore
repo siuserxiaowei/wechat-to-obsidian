@@ -17,3 +17,4 @@ build/
 keys.log
 wechat_keys.log
 exports/
+.daily-pipeline/

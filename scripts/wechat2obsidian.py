@@ -1302,8 +1302,9 @@ def run_wx_cli_json(args: argparse.Namespace, command: str) -> Any:
                 cmd.extend(["--since", args.since])
             if args.until:
                 cmd.extend(["--until", args.until])
-            if getattr(args, "media", False):
-                cmd.append("--media")
+            # jackwener/wx-cli 0.1.x 不支持 --media; 媒体路径由 message 字段直出
+            # if getattr(args, "media", False):
+            #     cmd.append("--media")
         else:
             cmd = [executable, "history", args.chat, "--limit", str(args.limit), "--format", "json"]
             if args.since:
@@ -1744,7 +1745,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--db", required=True, help="Decrypted message_0.db path")
     export.add_argument("--target", required=True, help="filehelper, wxid_*, or *@chatroom target id")
     export.add_argument("--vault", required=True, help="Obsidian vault root")
-    export.add_argument("--folder", default="WeChat", help="Folder inside the vault")
+    export.add_argument("--folder", default="聊天记录导出", help="Folder inside the vault")
     export.add_argument("--subfolder", help="Subfolder inside --folder; defaults to a safe target id")
     export.add_argument("--wechat-root", help="WeChat wxid_* user directory for attachments")
     export.add_argument("--no-attachments", action="store_true", help="Skip attachment copying")
@@ -1759,7 +1760,7 @@ def build_parser() -> argparse.ArgumentParser:
     weflow_json = sub.add_parser("import-weflow-json", help="Import a WeFlow JSON export into Obsidian")
     weflow_json.add_argument("--input", required=True, help="WeFlow JSON export path")
     weflow_json.add_argument("--vault", required=True, help="Obsidian vault root")
-    weflow_json.add_argument("--folder", default="WeChat", help="Folder inside the vault")
+    weflow_json.add_argument("--folder", default="聊天记录导出", help="Folder inside the vault")
     weflow_json.add_argument("--subfolder", help="Subfolder inside --folder; defaults to session title")
     weflow_json.add_argument("--title", help="Override note title")
     weflow_json.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
@@ -1782,7 +1783,7 @@ def build_parser() -> argparse.ArgumentParser:
     weflow_api = sub.add_parser("import-weflow-api", help="Import messages from the WeFlow local HTTP API")
     weflow_api.add_argument("--talker", required=True, help="WeFlow/WeChat session id, e.g. filehelper, wxid_*, or *@chatroom")
     weflow_api.add_argument("--vault", required=True, help="Obsidian vault root")
-    weflow_api.add_argument("--folder", default="WeChat", help="Folder inside the vault")
+    weflow_api.add_argument("--folder", default="聊天记录导出", help="Folder inside the vault")
     weflow_api.add_argument("--subfolder", help="Subfolder inside --folder; defaults to talker")
     weflow_api.add_argument("--title", help="Override note title")
     weflow_api.add_argument("--base-url", help="WeFlow API base URL; defaults to WeFlow config or http://127.0.0.1:5031")
@@ -1812,7 +1813,7 @@ def build_parser() -> argparse.ArgumentParser:
     wx_cli.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="CLI command to use")
     wx_cli.add_argument("--binary", help="Explicit wx/wechat-cli binary path")
     wx_cli.add_argument("--vault", required=True, help="Obsidian vault root")
-    wx_cli.add_argument("--folder", default="WeChat", help="Folder inside the vault")
+    wx_cli.add_argument("--folder", default="聊天记录导出", help="Folder inside the vault")
     wx_cli.add_argument("--subfolder", help="Subfolder inside --folder; defaults to chat title")
     wx_cli.add_argument("--title", help="Override note title")
     wx_cli.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")

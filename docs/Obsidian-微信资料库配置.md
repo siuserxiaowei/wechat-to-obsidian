@@ -547,6 +547,40 @@ path:"微信渠道" 2026-05-01
 
 ## 日常使用流程
 
+### 每天自动生成群日报
+
+推荐使用一键流水线：
+
+```bash
+python3 scripts/group_daily_pipeline.py \
+  --chat "付费群名称" \
+  --date yesterday \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "付费群/付费群名称"
+```
+
+它会生成：
+
+```text
+2026-05/
+├── 2026-05-01.md
+├── 2026-05-01-干货分析.md
+├── 2026-05-01-日报.html
+├── 2026-05-01-日报.png
+├── 2026-05-01-stats.json
+├── 2026-05-01-ai_content.json
+└── raw/
+    └── 2026-05-01-wx-history.json
+```
+
+多个群用配置文件：
+
+```bash
+cp configs/group_daily.example.json configs/group_daily.json
+python3 scripts/group_daily_pipeline.py --config configs/group_daily.json --date yesterday
+```
+
 ### 每天或每周同步一次
 
 1. 打开微信桌面版。

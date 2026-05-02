@@ -350,6 +350,56 @@ python3 scripts/wechat2obsidian.py import-weflow-json \
   --folder "微信渠道"
 ```
 
+## 一键群日报流水线
+
+每天只跑一条命令：
+
+```bash
+python3 scripts/group_daily_pipeline.py \
+  --chat "付费群名称" \
+  --date yesterday \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "付费群/付费群名称"
+```
+
+它会自动完成：
+
+```text
+读取群聊 -> 写入 Obsidian 原始记录 -> 生成干货分析 -> 生成日报 HTML/PNG
+```
+
+批量跑多个群，复制配置样例：
+
+```bash
+cp configs/group_daily.example.json configs/group_daily.json
+```
+
+编辑 `configs/group_daily.json` 里的 vault 和 groups，然后运行：
+
+```bash
+python3 scripts/group_daily_pipeline.py \
+  --config configs/group_daily.json \
+  --date yesterday
+```
+
+如果你要把 HTML/PNG 发布到 GitHub Pages，在配置里填写：
+
+```json
+"publish": {
+  "repo": "/path/to/github-pages-repo",
+  "base_url": "https://你的用户名.github.io/你的仓库",
+  "push": true
+}
+```
+
+本机每天早上自动跑，建议用 Codex 自动任务或系统定时任务执行：
+
+```bash
+cd /Users/siuserxiaowei/Desktop/dont哥\ 对谈/wechat-to-obsidian
+python3 scripts/group_daily_pipeline.py --config configs/group_daily.json --date yesterday
+```
+
 ## 安全说明
 
 - 只处理你自己的微信数据。
