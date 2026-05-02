@@ -31,6 +31,13 @@ ROOT = Path(__file__).resolve().parents[1]
 WECHAT2OBSIDIAN = ROOT / "scripts" / "wechat2obsidian.py"
 DEFAULT_DAILY_REPORT_REPO = ROOT.parent / "wechat-daily-report-skill"
 DEFAULT_WORK_DIR = ROOT / ".daily-pipeline"
+PUBLIC_GROUP_LABELS = {
+    "group-1": "一群",
+    "group-2": "二群",
+    "group-3": "三群",
+    "group-4": "四群",
+    "group-5": "五群",
+}
 
 
 def die(message: str) -> None:
@@ -357,14 +364,82 @@ def write_analysis_note(path: Path, title: str, day: str, ai_content: dict[str, 
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
-def update_publish_index(publish_repo: Path, base_url: str | None) -> None:
+def public_label_from_slug(slug: str) -> str:
+    if slug in PUBLIC_GROUP_LABELS:
+        return PUBLIC_GROUP_LABELS[slug]
+    if slug.startswith("group-"):
+        return "演示群"
+    return "匿名群"
+
+
+def render_public_demo_report(title: str, day: str) -> str:
+    safe_title = html_lib.escape(title)
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{safe_title}日报演示 · {day}</title>
+  <style>
+    :root {{ color-scheme: light; --ink: #18231f; --muted: #66736d; --line: #dbe5dc; --paper: #fbfaf5; --panel: #ffffff; --accent: #b95f2b; --accent-soft: #f5e7dc; --green: #2b6d58; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Arial, sans-serif; color: var(--ink); background: linear-gradient(135deg, #eef4ec 0%, var(--paper) 48%, #eef2f6 100%); }}
+    main {{ width: min(1060px, calc(100vw - 48px)); margin: 0 auto; padding: 72px 0 88px; }}
+    .eyebrow {{ color: var(--accent); font-size: 13px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }}
+    .hero {{ margin-top: 38px; padding: 34px; border-radius: 8px; color: #fff9ed; background: linear-gradient(135deg, rgba(31, 43, 36, .96), rgba(54, 73, 84, .92), rgba(116, 55, 35, .88)); }}
+    h1 {{ margin: 10px 0 14px; font-size: clamp(42px, 7vw, 76px); line-height: 1; letter-spacing: 0; }}
+    .hero p {{ width: min(760px, 100%); color: rgba(255, 249, 237, .82); font-size: 18px; line-height: 1.8; }}
+    .hero-grid, .cards {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 30px; }}
+    .hero-metric {{ padding: 18px; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; background: rgba(255,255,255,.08); }}
+    .hero-metric strong {{ display: block; font-size: 34px; }}
+    .hero-metric span {{ display: block; margin-top: 8px; color: rgba(255,249,237,.72); font-size: 14px; }}
+    .section-title {{ margin: 46px 0 16px; font-size: 32px; letter-spacing: 0; }}
+    .cards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0; }}
+    .card, .notice {{ border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, .78); box-shadow: 0 18px 50px rgba(36, 48, 40, .06); }}
+    .card {{ padding: 24px; min-height: 150px; }}
+    .card h2 {{ margin: 0 0 12px; font-size: 22px; letter-spacing: 0; }}
+    .card p {{ margin: 0; color: var(--muted); line-height: 1.75; }}
+    .notice {{ margin-top: 32px; padding: 18px 20px; color: var(--green); background: #eef6ef; }}
+    @media (max-width: 720px) {{ main {{ width: min(100vw - 28px, 1060px); padding-top: 36px; }} .hero-grid, .cards {{ grid-template-columns: 1fr; }} }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Wechat Daily Demo · {day}</div>
+    <section class="hero">
+      <div class="eyebrow">匿名群日报</div>
+      <h1>{safe_title}日报</h1>
+      <p>公开页面只展示日报样式和信息组织方式。真实群名、成员昵称、头像、聊天原文、链接、词云和具体讨论内容不会出现在这里。</p>
+      <div class="hero-grid">
+        <div class="hero-metric"><strong>已生成</strong><span>日报状态</span></div>
+        <div class="hero-metric"><strong>已归档</strong><span>Obsidian 私有库</span></div>
+        <div class="hero-metric"><strong>已发布</strong><span>GitHub Pages 演示</span></div>
+      </div>
+    </section>
+    <h2 class="section-title">日报结构演示</h2>
+    <section class="cards">
+      <article class="card"><h2>今日概览</h2><p>展示当天讨论是否活跃、是否有值得复盘的内容，以及是否已经写入本地知识库。</p></article>
+      <article class="card"><h2>话题提炼</h2><p>把碎片化聊天归纳成几个主题，方便后续在 Obsidian 里继续整理成长期笔记。</p></article>
+      <article class="card"><h2>资料收纳</h2><p>识别链接、文件、工具和案例，但公开演示页不会展示真实链接或原始分享人。</p></article>
+      <article class="card"><h2>行动项</h2><p>把需要跟进的想法、问题和待办沉淀下来，第二天可以继续追踪。</p></article>
+    </section>
+    <div class="notice">隐私说明：完整聊天记录和详细分析只保存在本地 Obsidian；公开页面仅用于展示产品效果。</div>
+  </main>
+</body>
+</html>
+"""
+
+
+def update_publish_index(publish_repo: Path, base_url: str | None, public_demo: bool = True) -> None:
     reports = sorted((publish_repo / "reports").glob("*/*/index.html"), reverse=True)
     items = []
     for html in reports[:80]:
         rel = html.relative_to(publish_repo)
         slug = rel.parts[1]
         day = rel.parts[2]
-        label = f"{slug} / {day}"
+        if public_demo and not slug.startswith("group-"):
+            continue
+        label = public_label_from_slug(slug) if public_demo else f"{slug} / {day}"
         href = rel.as_posix()
         items.append(
             f'<a class="report-card" href="{html_lib.escape(href)}">'
@@ -378,7 +453,7 @@ def update_publish_index(publish_repo: Path, base_url: str | None) -> None:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>微信群日报</title>
+  <title>微信群日报演示</title>
   <style>
     :root {
       color-scheme: light;
@@ -501,12 +576,12 @@ def update_publish_index(publish_repo: Path, base_url: str | None) -> None:
 <body>
   <main>
     <div class="eyebrow">Wechat Daily Archive</div>
-    <h1>微信群日报</h1>
-    <p class="lead">每天自动把微信群聊沉淀为 Obsidian 笔记、可阅读日报和 GitHub Pages 归档。</p>
+    <h1>微信群日报演示</h1>
+    <p class="lead">这是对外演示页，只展示日报产品形态。真实群名、成员昵称、聊天原文、链接、头像和敏感统计都已隐藏。</p>
     <section class="summary">
-      <div class="metric"><strong>""" + str(len(items)) + """</strong><span>已发布日报</span></div>
+      <div class="metric"><strong>""" + str(len(items)) + """</strong><span>演示群组</span></div>
       <div class="metric"><strong>08:30</strong><span>每天自动运行</span></div>
-      <div class="metric"><strong>5</strong><span>当前追踪群</span></div>
+      <div class="metric"><strong>0</strong><span>公开聊天原文</span></div>
     </section>
     <section class="grid">
 """ + "\n".join(items) + """
@@ -518,18 +593,33 @@ def update_publish_index(publish_repo: Path, base_url: str | None) -> None:
     (publish_repo / "index.html").write_text(html_text, encoding="utf-8")
 
 
-def publish_report(publish: dict[str, Any], slug: str, day: str, html_path: Path, png_path: Path | None) -> str:
+def publish_report(
+    publish: dict[str, Any],
+    slug: str,
+    day: str,
+    html_path: Path,
+    png_path: Path | None,
+    public_title: str | None = None,
+    public_slug: str | None = None,
+) -> str:
     repo = repo_relative_path(str(publish.get("repo", "")))
     if not repo:
         return ""
     if not repo.exists():
         die(f"Publish repo not found: {repo}")
-    dest = repo / "reports" / slug / day
+    privacy = str(publish.get("privacy") or publish.get("public_mode") or "demo")
+    public_demo = privacy != "full"
+    target_slug = safe_slug(public_slug or slug) if public_demo else slug
+    title = public_title or public_label_from_slug(target_slug)
+    dest = repo / "reports" / target_slug / day
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(html_path, dest / "index.html")
-    if png_path and png_path.exists():
+    if public_demo:
+        (dest / "index.html").write_text(render_public_demo_report(title, day), encoding="utf-8")
+    else:
+        shutil.copy2(html_path, dest / "index.html")
+    if not public_demo and png_path and png_path.exists():
         shutil.copy2(png_path, dest / "report.png")
-    update_publish_index(repo, publish.get("base_url"))
+    update_publish_index(repo, publish.get("base_url"), public_demo=public_demo)
 
     if publish.get("push"):
         run(["git", "add", "index.html", "reports"], cwd=repo)
@@ -538,7 +628,7 @@ def publish_report(publish: dict[str, Any], slug: str, day: str, html_path: Path
             run(["git", "commit", "-m", f"Add {day} {slug} daily report"], cwd=repo)
             run(["git", "push"], cwd=repo)
     base_url = str(publish.get("base_url") or "").rstrip("/")
-    return f"{base_url}/reports/{slug}/{day}/" if base_url else str(dest / "index.html")
+    return f"{base_url}/reports/{target_slug}/{day}/" if base_url else str(dest / "index.html")
 
 
 def notification_text(day: str, summaries: list[dict[str, Any]]) -> str:
@@ -772,7 +862,15 @@ def run_group(day: str, group: dict[str, Any], args: argparse.Namespace, config:
     publish_url = ""
     publish = group.get("publish")
     if isinstance(publish, dict) and publish.get("repo"):
-        publish_url = publish_report(publish, slug, day, report_html_work, report_png_work if report_png_work.exists() else None)
+        publish_url = publish_report(
+            publish,
+            slug,
+            day,
+            report_html_work,
+            report_png_work if report_png_work.exists() else None,
+            public_title=group.get("public_title"),
+            public_slug=group.get("public_slug"),
+        )
 
     return {
         "chat": chat or str(input_json),

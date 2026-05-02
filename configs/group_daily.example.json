@@ -8,7 +8,8 @@
   "publish": {
     "repo": "../wechat-daily-report-skill",
     "base_url": "https://your-name.github.io/wechat-daily-report-skill",
-    "push": true
+    "push": true,
+    "privacy": "demo"
   },
   "notify": {
     "telegram": {
@@ -27,6 +28,8 @@
       "chat": "付费群名称",
       "title": "付费群名称",
       "slug": "paid-group",
+      "public_title": "一群",
+      "public_slug": "group-1",
       "subfolder": "付费群/付费群名称",
       "limit": 5000,
       "media": false

@@ -389,15 +389,30 @@ python3 scripts/group_daily_pipeline.py \
 "publish": {
   "repo": "/path/to/github-pages-repo",
   "base_url": "https://你的用户名.github.io/你的仓库",
-  "push": true
+  "push": true,
+  "privacy": "demo"
 }
 ```
 
 发布后的路径固定是：
 
 ```text
-https://你的用户名.github.io/你的仓库/reports/<群slug>/<日期>/
+https://你的用户名.github.io/你的仓库/reports/<公开slug>/<日期>/
 ```
+
+`privacy: "demo"` 是默认公开模式：GitHub Pages 只展示匿名演示页，不会公开真实群名、成员名、头像、聊天原文、链接、词云和具体话题。每个群可以配置对外显示名：
+
+```json
+{
+  "chat": "真实群名",
+  "title": "真实群名",
+  "slug": "private-slug",
+  "public_title": "一群",
+  "public_slug": "group-1"
+}
+```
+
+只有你明确把 `privacy` 改成 `"full"`，才会把完整日报 HTML 复制到 GitHub Pages。公开演示不建议这样做。
 
 如果要在跑完后同步提醒飞书和 Telegram，复制本地环境变量样例：
 

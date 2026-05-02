@@ -587,7 +587,8 @@ python3 scripts/group_daily_pipeline.py --config configs/group_daily.json --date
 "publish": {
   "repo": "/Users/siuserxiaowei/Desktop/dont哥 对谈/wechat-daily-report-skill",
   "base_url": "https://siuserxiaowei.github.io/wechat-daily-report-skill",
-  "push": true
+  "push": true,
+  "privacy": "demo"
 },
 "env_file": "configs/group_daily.env",
 "notify": {
@@ -620,7 +621,19 @@ FEISHU_WEBHOOK_SECRET=飞书机器人签名密钥，可选
 日报会同步到：
 
 ```text
-https://siuserxiaowei.github.io/wechat-daily-report-skill/reports/<群slug>/<日期>/
+https://siuserxiaowei.github.io/wechat-daily-report-skill/reports/<公开slug>/<日期>/
+```
+
+公开 Pages 默认是匿名演示页：群名显示成 `一群`、`二群` 这类外部展示名，页面里不出现真实成员名、头像、聊天原文、链接、词云和具体话题。每个群可以这样配置：
+
+```json
+{
+  "chat": "真实群名",
+  "title": "真实群名",
+  "slug": "private-slug",
+  "public_title": "一群",
+  "public_slug": "group-1"
+}
 ```
 
 飞书和 Telegram 只接收生成结果摘要与链接，不接收完整聊天记录。
