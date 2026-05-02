@@ -13,6 +13,7 @@ import base64
 import datetime as dt
 import hashlib
 import hmac
+import html as html_lib
 import json
 import os
 import re
@@ -361,14 +362,159 @@ def update_publish_index(publish_repo: Path, base_url: str | None) -> None:
     items = []
     for html in reports[:80]:
         rel = html.relative_to(publish_repo)
-        label = " / ".join(rel.parts[1:-1])
+        slug = rel.parts[1]
+        day = rel.parts[2]
+        label = f"{slug} / {day}"
         href = rel.as_posix()
-        items.append(f'<li><a href="{href}">{label}</a></li>')
+        items.append(
+            f'<a class="report-card" href="{html_lib.escape(href)}">'
+            f'<span class="slug">{html_lib.escape(slug)}</span>'
+            f'<span class="day">{html_lib.escape(day)}</span>'
+            f'<span class="arrow">open</span>'
+            f'</a>'
+        )
     html_text = """<!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>微信群日报</title></head>
-<body><h1>微信群日报</h1><ul>
-""" + "\n".join(items) + "\n</ul></body></html>\n"
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>微信群日报</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18231f;
+      --muted: #64716b;
+      --line: #dbe5dc;
+      --paper: #fbfaf5;
+      --panel: #ffffff;
+      --accent: #b95f2b;
+      --accent-soft: #f5e7dc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #eef4ec 0%, var(--paper) 48%, #eef2f6 100%);
+      color: var(--ink);
+    }
+    main {
+      width: min(1040px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: 72px 0 88px;
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 12px 0 12px;
+      font-size: clamp(42px, 8vw, 88px);
+      line-height: .96;
+      letter-spacing: 0;
+    }
+    .lead {
+      width: min(720px, 100%);
+      margin: 0;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.8;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 44px 0 28px;
+    }
+    .metric {
+      padding: 22px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, .68);
+      border-radius: 8px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 32px;
+      line-height: 1;
+    }
+    .metric span {
+      display: block;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .report-card {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 16px;
+      padding: 20px 22px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: inherit;
+      text-decoration: none;
+      box-shadow: 0 18px 50px rgba(36, 48, 40, .06);
+    }
+    .report-card:hover {
+      border-color: #c9d7cd;
+      transform: translateY(-1px);
+    }
+    .slug {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .day {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .arrow {
+      padding: 8px 11px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    @media (max-width: 720px) {
+      main { width: min(100vw - 28px, 1040px); padding-top: 36px; }
+      .summary { grid-template-columns: 1fr; }
+      .report-card { grid-template-columns: 1fr; align-items: start; }
+      .slug { white-space: normal; }
+      h1 { font-size: 46px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Wechat Daily Archive</div>
+    <h1>微信群日报</h1>
+    <p class="lead">每天自动把微信群聊沉淀为 Obsidian 笔记、可阅读日报和 GitHub Pages 归档。</p>
+    <section class="summary">
+      <div class="metric"><strong>""" + str(len(items)) + """</strong><span>已发布日报</span></div>
+      <div class="metric"><strong>08:30</strong><span>每天自动运行</span></div>
+      <div class="metric"><strong>5</strong><span>当前追踪群</span></div>
+    </section>
+    <section class="grid">
+""" + "\n".join(items) + """
+    </section>
+  </main>
+</body>
+</html>
+"""
     (publish_repo / "index.html").write_text(html_text, encoding="utf-8")
 
 
