@@ -18,5 +18,6 @@ keys.log
 wechat_keys.log
 exports/
 .daily-pipeline/
+logs/
 configs/group_daily.json
 configs/group_daily.env

@@ -42,7 +42,7 @@ PUBLIC_GROUP_LABELS = {
 
 def die(message: str) -> None:
     print(f"[!] {message}", file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(message)
 
 
 def info(message: str) -> None:
@@ -443,7 +443,7 @@ def update_publish_index(publish_repo: Path, base_url: str | None, public_demo: 
         href = rel.as_posix()
         items.append(
             f'<a class="report-card" href="{html_lib.escape(href)}">'
-            f'<span class="slug">{html_lib.escape(slug)}</span>'
+            f'<span class="slug">{html_lib.escape(label)}</span>'
             f'<span class="day">{html_lib.escape(day)}</span>'
             f'<span class="arrow">open</span>'
             f'</a>'
@@ -632,19 +632,29 @@ def publish_report(
 
 
 def notification_text(day: str, summaries: list[dict[str, Any]]) -> str:
+    failed = [item for item in summaries if item.get("status") == "failed"]
     lines = [
         f"微信群日报已生成: {day}",
         "",
-        f"群数量: {len(summaries)}",
+        f"群数量: {len(summaries)} / 失败: {len(failed)}",
     ]
     for index, item in enumerate(summaries, 1):
+        title = item.get("public_title") or item.get("title") or "未命名群"
+        if item.get("status") == "failed":
+            lines.extend([
+                "",
+                f"{index}. {title}",
+                f"状态: 失败",
+                f"原因: {item.get('error', '未知错误')}",
+            ])
+            continue
         count = item.get("message_count", 0)
         active = item.get("active_user_count", 0)
         time_range = item.get("time_range") or "无活跃时段"
         link = item.get("publish_url") or item.get("report_html") or ""
         lines.extend([
             "",
-            f"{index}. {item.get('title', '未命名群')}",
+            f"{index}. {title}",
             f"消息: {count} 条 / 活跃成员: {active} 人 / 时段: {time_range}",
             f"日报: {link}",
         ])
@@ -875,6 +885,8 @@ def run_group(day: str, group: dict[str, Any], args: argparse.Namespace, config:
     return {
         "chat": chat or str(input_json),
         "title": title,
+        "public_title": group.get("public_title") or "",
+        "status": "ok",
         "date": day,
         "message_count": stats_for_summary.get("meta", {}).get("total_count", 0),
         "active_user_count": stats_for_summary.get("meta", {}).get("active_user_count", 0),
@@ -920,14 +932,30 @@ def main() -> int:
     summaries = []
     for group in groups:
         merged = merge_group(config, group, args)
-        summaries.append(run_group(day, merged, args, config))
+        try:
+            summaries.append(run_group(day, merged, args, config))
+        except SystemExit as exc:
+            title = str(merged.get("title") or merged.get("chat") or merged.get("public_title") or "未命名群")
+            error = str(exc)
+            warn(f"{title} failed: {error}")
+            summaries.append({
+                "chat": str(merged.get("chat") or merged.get("input_json") or ""),
+                "title": title,
+                "public_title": merged.get("public_title") or "",
+                "status": "failed",
+                "date": day,
+                "error": error,
+            })
     send_notifications(config, day, summaries)
     if args.json:
         print(json.dumps({"date": day, "reports": summaries}, ensure_ascii=False, indent=2))
     else:
         info("Daily pipeline complete")
         for item in summaries:
-            info(f"{item['title']}: {item['report_html']}")
+            if item.get("status") == "failed":
+                info(f"{item['title']}: failed - {item.get('error', 'unknown error')}")
+                continue
+            info(f"{item['title']}: {item.get('report_html', '')}")
             if item.get("publish_url"):
                 info(f"published: {item['publish_url']}")
     return 0
