@@ -95,19 +95,23 @@ sudo wx init
 确认能列出会话：
 
 ```bash
-python3 scripts/wechat2obsidian.py wx-sessions --limit 100
+python3 scripts/wechat2obsidian.py wx-sessions --limit 500 --json
 ```
+
+建议优先从输出里复制唯一的 `username`，例如 `filehelper`、`wxid_*` 或 `*@chatroom`。群名可能重复，折叠会话里也可能出现占位项；如果用群名称导入且匹配到多个会话，CLI 会停止并列出候选，避免悄悄导错群。
 
 导入文件传输助手：
 
 ```bash
 python3 scripts/wechat2obsidian.py import-wx-cli \
-  --chat filehelper \
+  --chat-id filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
   --since 2026-01-01 \
   --until 2026-05-01 \
+  --page-size 500 \
+  --max-messages 20000 \
   --media
 ```
 
@@ -115,13 +119,17 @@ python3 scripts/wechat2obsidian.py import-wx-cli \
 
 ```bash
 python3 scripts/wechat2obsidian.py import-wx-cli \
-  --chat "群名称或 chatroom id" \
+  --chat-id "1234567890@chatroom" \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "重要群聊/群名" \
   --since 2026-04-01 \
-  --until 2026-05-01
+  --until 2026-05-01 \
+  --page-size 500 \
+  --max-messages 50000
 ```
+
+也可以用 `--chat-name "群名称"` 让 CLI 先通过 `wx-sessions` 解析会话；只有唯一匹配时才会继续导入。导入 manifest 会记录 `resolved_session`、`pages_fetched`、`raw_message_count`、`deduped_count`、`filtered_count`、`dropped_count`、首尾消息时间和 warnings，方便判断这次是否真的抓全。
 
 ### 路线 B：本地 wechat-cli 包导入，备用
 
@@ -136,7 +144,7 @@ tar -xzf /Users/siuserxiaowei/Library/Containers/com.tencent.xinWeChat/Data/Docu
 ```bash
 python3 scripts/wechat2obsidian.py import-wx-cli \
   --binary /tmp/wechat-cli-pkg/wechat-cli-pkg/wechat-cli/node_modules/@canghe_ai/wechat-cli-darwin-arm64/bin/wechat-cli \
-  --chat "群名称或文件传输助手" \
+  --chat-id "群 chatroom id 或 filehelper" \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "wx-cli导入" \
@@ -337,10 +345,12 @@ python3 scripts/wechat2obsidian.py wx-sessions --limit 100
 
 # 从 wx-cli 导入文件传输助手
 python3 scripts/wechat2obsidian.py import-wx-cli \
-  --chat filehelper \
+  --chat-id filehelper \
   --vault ~/Documents/Obsidian\ Vault \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
+  --page-size 500 \
+  --max-messages 20000 \
   --media
 
 # 从 WeFlow JSON 导入

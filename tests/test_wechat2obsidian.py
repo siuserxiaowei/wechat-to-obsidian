@@ -3,9 +3,11 @@ import hashlib
 import importlib.util
 import json
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -170,6 +172,158 @@ class WeChatToObsidianTests(unittest.TestCase):
             manifest = json.loads((vault / "WeChat" / "文件传输助手" / "_wx_cli_import_manifest.json").read_text())
             self.assertEqual(manifest["source"], "wx-cli")
             self.assertEqual(manifest["message_count"], 1)
+
+    def test_resolve_wx_session_rejects_ambiguous_names_and_filters_placeholders(self):
+        sessions = [
+            {
+                "chat": "同名测试群",
+                "username": "111@chatroom",
+                "chat_type": "group",
+                "is_group": True,
+            },
+            {
+                "chat": "同名测试群",
+                "username": "222@chatroom",
+                "chat_type": "group",
+                "is_group": True,
+            },
+            {
+                "chat": "@placeholder_foldgroup",
+                "username": "@placeholder_foldgroup",
+                "chat_type": "folded",
+                "is_group": False,
+            },
+        ]
+
+        with self.assertRaises(SystemExit):
+            wechat2obsidian.resolve_wx_session(sessions, chat_name="同名测试群")
+
+        resolved = wechat2obsidian.resolve_wx_session(sessions, chat_id="222@chatroom")
+        self.assertEqual(resolved["username"], "222@chatroom")
+        self.assertEqual(resolved["display_name"], "同名测试群")
+
+        with self.assertRaises(SystemExit):
+            wechat2obsidian.resolve_wx_session(sessions, chat_name="@placeholder_foldgroup")
+
+    def test_import_wx_cli_paginates_dedupes_and_writes_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+
+            def fake_run(cmd, capture_output, text, encoding, errors):
+                offset = int(cmd[cmd.index("--offset") + 1])
+                pages = {
+                    0: [
+                        {
+                            "timestamp": int(dt.datetime(2026, 5, 1, 9, 0).timestamp()),
+                            "sender": "Alice",
+                            "content": "first",
+                            "type": "text",
+                            "local_id": 1,
+                        },
+                        {
+                            "timestamp": int(dt.datetime(2026, 5, 1, 9, 1).timestamp()),
+                            "from": "Bob",
+                            "message": "second",
+                            "msg_type": "text",
+                            "local_id": 2,
+                            "extra_field": "kept for diagnostics",
+                        },
+                    ],
+                    2: [
+                        {
+                            "timestamp": int(dt.datetime(2026, 5, 1, 9, 1).timestamp()),
+                            "sender": "Bob",
+                            "content": "second duplicate",
+                            "type": "text",
+                            "local_id": 2,
+                        },
+                        {
+                            "timestamp": int(dt.datetime(2026, 5, 1, 9, 2).timestamp()),
+                            "talker": "Carol",
+                            "text": "third",
+                            "local_id": 3,
+                        },
+                    ],
+                    4: [
+                        {
+                            "sender": "NoTime",
+                            "content": "dropped because timestamp is missing",
+                            "local_id": 4,
+                        }
+                    ],
+                }
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(pages[offset], ensure_ascii=False), "")
+
+            with mock.patch.object(wechat2obsidian, "resolve_wx_cli", return_value=("wx", "wx")):
+                with mock.patch.object(wechat2obsidian.subprocess, "run", side_effect=fake_run):
+                    code = wechat2obsidian.main([
+                        "import-wx-cli",
+                        "--chat-id",
+                        "222@chatroom",
+                        "--no-resolve-chat",
+                        "--page-size",
+                        "2",
+                        "--max-messages",
+                        "5",
+                        "--vault",
+                        str(vault),
+                        "--folder",
+                        "WeChat",
+                    ])
+            self.assertEqual(code, 0)
+
+            manifest = json.loads((vault / "WeChat" / "222@chatroom" / "_wx_cli_import_manifest.json").read_text())
+            self.assertEqual(manifest["pages_fetched"], 3)
+            self.assertEqual(manifest["raw_message_count"], 5)
+            self.assertEqual(manifest["deduped_count"], 3)
+            self.assertEqual(manifest["filtered_count"], 3)
+            self.assertEqual(manifest["dropped_count"], 1)
+            self.assertEqual(manifest["message_count"], 3)
+            self.assertEqual(manifest["resolved_session"]["username"], "222@chatroom")
+            self.assertIn("extra_field", manifest["raw_debug"]["unknown_message_keys"])
+            self.assertTrue(manifest["warnings"])
+            self.assertEqual(manifest["first_message_at"][:10], "2026-05-01")
+            self.assertEqual(manifest["last_message_at"][:10], "2026-05-01")
+
+    def test_wx_cli_normalization_keeps_compatible_fields_and_raw_debug(self):
+        payload = {
+            "chat": "兼容性测试",
+            "messages": [
+                {
+                    "createTime": int(dt.datetime(2026, 5, 2, 10, 0).timestamp()),
+                    "from_name": "Sender",
+                    "rawContent": "raw body",
+                    "localType": 49,
+                    "filePath": "/tmp/a.pdf",
+                    "unknownFutureField": {"x": 1},
+                }
+            ],
+        }
+
+        title, messages, audit = wechat2obsidian.normalize_wx_cli_payload_with_audit(payload)
+        self.assertEqual(title, "兼容性测试")
+        self.assertEqual(messages[0]["sender"], "Sender")
+        self.assertEqual(messages[0]["content"], "raw body")
+        self.assertEqual(messages[0]["media_path"], "/tmp/a.pdf")
+        self.assertIn("unknownFutureField", audit["raw_debug"]["unknown_message_keys"])
+
+    def test_multiple_wechat_user_dirs_are_listed_not_auto_selected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            first = base / "wxid_first"
+            second = base / "wxid_second"
+            for root in (first, second):
+                db_dir = root / "db_storage" / "message"
+                db_dir.mkdir(parents=True)
+                (db_dir / "message_0.db").write_bytes(b"fake")
+
+            candidates = wechat2obsidian.user_dir_candidates(base)
+            self.assertEqual([item["name"] for item in candidates], ["wxid_first", "wxid_second"])
+            self.assertTrue(candidates[0]["databases"]["message_0.db"]["exists"])
+            with self.assertRaises(SystemExit):
+                wechat2obsidian.pick_user_dir(base)
 
 
 if __name__ == "__main__":

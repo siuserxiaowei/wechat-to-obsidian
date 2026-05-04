@@ -36,6 +36,12 @@ DEFAULT_CACHE_DIR = Path.home() / ".cache" / "wechat-to-obsidian"
 DEFAULT_KEYS_LOG = DEFAULT_CACHE_DIR / "keys.log"
 DEFAULT_WEFLOW_CONFIG = Path.home() / "Library" / "Application Support" / "weflow" / "WeFlow-config.json"
 WECHAT_BUNDLE_ID = "com.tencent.xinWeChat"
+WECHAT_KEY_DATABASES = {
+    "message_0.db": Path("db_storage/message/message_0.db"),
+    "contact.db": Path("db_storage/contact/contact.db"),
+    "favorite.db": Path("db_storage/favorite/favorite.db"),
+    "session.db": Path("db_storage/session/session.db"),
+}
 
 TYPE_MAP = {
     1: "text",
@@ -202,17 +208,6 @@ def default_xwechat_base() -> Path:
     return Path.home() / "Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files"
 
 
-def dir_size(path: Path) -> int:
-    total = 0
-    for root, _, files in os.walk(path):
-        for name in files:
-            try:
-                total += (Path(root) / name).stat().st_size
-            except OSError:
-                continue
-    return total
-
-
 def locate_user_dirs(base: Path | None = None) -> list[Path]:
     base = base or default_xwechat_base()
     if not base.exists():
@@ -220,14 +215,70 @@ def locate_user_dirs(base: Path | None = None) -> list[Path]:
     return sorted([p for p in base.iterdir() if p.is_dir() and p.name.startswith("wxid_")])
 
 
+def iso_from_mtime(value: float) -> str:
+    return dt.datetime.fromtimestamp(value).astimezone().isoformat(timespec="seconds")
+
+
+def user_dir_candidates(base: Path | None = None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for user_dir in locate_user_dirs(base):
+        dbs: dict[str, dict[str, Any]] = {}
+        mtimes: list[float] = []
+        total_key_db_bytes = 0
+        for label, rel in WECHAT_KEY_DATABASES.items():
+            path = user_dir / rel
+            exists = path.exists()
+            size = 0
+            modified_at = ""
+            if exists:
+                try:
+                    stat = path.stat()
+                    size = stat.st_size
+                    total_key_db_bytes += size
+                    mtimes.append(stat.st_mtime)
+                    modified_at = iso_from_mtime(stat.st_mtime)
+                except OSError:
+                    pass
+            dbs[label] = {
+                "exists": exists,
+                "path": str(path),
+                "bytes": size,
+                "modified_at": modified_at,
+            }
+
+        if not mtimes:
+            try:
+                mtimes.append(user_dir.stat().st_mtime)
+            except OSError:
+                pass
+        rows.append({
+            "name": user_dir.name,
+            "path": str(user_dir),
+            "latest_modified_at": iso_from_mtime(max(mtimes)) if mtimes else "",
+            "total_key_db_bytes": total_key_db_bytes,
+            "databases": dbs,
+        })
+    return sorted(rows, key=lambda item: item["name"])
+
+
+def format_user_dir_candidate(item: dict[str, Any]) -> str:
+    dbs = item.get("databases") if isinstance(item.get("databases"), dict) else {}
+    present = [name for name, meta in dbs.items() if isinstance(meta, dict) and meta.get("exists")]
+    db_text = ",".join(present) if present else "no key dbs"
+    return f"{item.get('name')}  latest={item.get('latest_modified_at') or '-'}  dbs={db_text}  path={item.get('path')}"
+
+
 def pick_user_dir(base: Path | None = None) -> Path:
-    dirs = locate_user_dirs(base)
-    if not dirs:
+    candidates = user_dir_candidates(base)
+    if not candidates:
         die(f"No wxid_* user directories found under {base or default_xwechat_base()}")
-    if len(dirs) == 1:
-        return dirs[0]
-    warn(f"Multiple WeChat user dirs found: {[p.name for p in dirs]}; selecting the largest")
-    return max(dirs, key=dir_size)
+    if len(candidates) == 1:
+        return Path(str(candidates[0]["path"]))
+    details = "\n".join("  - " + format_user_dir_candidate(item) for item in candidates)
+    die(
+        "Multiple WeChat user dirs found; choose one explicitly with --wechat-root or --base:\n"
+        + details
+    )
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -245,9 +296,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     add("WeChat.app", bool(app and app.exists()), str(app) if app else "not found")
 
     base = expand_path(args.base) if args.base else default_xwechat_base()
-    user_dirs = locate_user_dirs(base)
+    user_dirs = user_dir_candidates(base)
     add("WeChat data root", base.exists(), str(base))
-    add("WeChat user dirs", bool(user_dirs), ", ".join(p.name for p in user_dirs) or "none")
+    add(
+        "WeChat user dirs",
+        bool(user_dirs),
+        " | ".join(format_user_dir_candidate(item) for item in user_dirs) or "none",
+    )
 
     for module_name, package_name in (
         ("frida", "frida-tools"),
@@ -275,11 +330,28 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_locate_user(args: argparse.Namespace) -> int:
-    user_dir = pick_user_dir(expand_path(args.base) if args.base else None)
+    candidates = user_dir_candidates(expand_path(args.base) if args.base else None)
+    if not candidates:
+        die(f"No wxid_* user directories found under {expand_path(args.base) if args.base else default_xwechat_base()}")
+    selected = candidates[0]["path"] if len(candidates) == 1 else ""
     if args.json:
-        print(json.dumps({"user_dir": str(user_dir)}, ensure_ascii=False, indent=2))
+        print(json.dumps({
+            "user_dir": selected,
+            "selected_user_dir": selected,
+            "user_dirs": candidates,
+            "warning": "" if selected else "multiple user dirs found; pass --base/--wechat-root explicitly",
+        }, ensure_ascii=False, indent=2))
     else:
-        print(str(user_dir) if args.print_path else f"Selected WeChat user dir: {user_dir}")
+        if args.print_path and selected:
+            print(selected)
+        elif args.print_path:
+            die("Multiple WeChat user dirs found; run locate-user without --print-path to inspect candidates")
+        elif selected:
+            print(f"Selected WeChat user dir: {selected}")
+        else:
+            print("Multiple WeChat user dirs found; choose one explicitly:")
+            for item in candidates:
+                print("  - " + format_user_dir_candidate(item))
     return 0
 
 
@@ -875,6 +947,161 @@ def load_json_maybe_wrapped(text: str) -> Any:
         return json.loads(text[min(starts): max(ends) + 1])
 
 
+def first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping and mapping[key] not in (None, ""):
+            return mapping[key]
+    return None
+
+
+def epoch_to_iso(value: int | None) -> str:
+    if value is None:
+        return ""
+    return dt.datetime.fromtimestamp(value).astimezone().isoformat(timespec="seconds")
+
+
+def extract_wx_sessions(data: Any) -> list[dict[str, Any]]:
+    sessions = data.get("sessions") if isinstance(data, dict) else data
+    if not isinstance(sessions, list):
+        return []
+    return [item for item in sessions if isinstance(item, dict)]
+
+
+def is_placeholder_wx_session(item: dict[str, Any]) -> bool:
+    chat_type = str(item.get("chat_type") or item.get("type") or "").lower()
+    username = str(item.get("username") or item.get("id") or item.get("chat") or "")
+    name = str(item.get("chat") or item.get("name") or item.get("display_name") or "")
+    return (
+        chat_type in {"folded", "placeholder"}
+        or username.startswith("@placeholder")
+        or name.startswith("@placeholder")
+    )
+
+
+def normalize_wx_session(item: dict[str, Any]) -> dict[str, Any]:
+    username = str(first_present(item, "username", "user_name", "id", "wxid", "chat") or "")
+    display_name = str(
+        first_present(item, "chat", "name", "display_name", "displayName", "remark", "nickname")
+        or username
+    )
+    chat_type = str(first_present(item, "chat_type", "type") or "")
+    is_group = bool(item.get("is_group")) or username.endswith("@chatroom") or chat_type == "group"
+    if not chat_type:
+        chat_type = "group" if is_group else "single"
+    aliases = {
+        value for value in (
+            username,
+            str(item.get("id") or ""),
+            str(item.get("chat") or ""),
+            str(item.get("name") or ""),
+            str(item.get("display_name") or ""),
+            str(item.get("displayName") or ""),
+        )
+        if value
+    }
+    return {
+        "username": username,
+        "display_name": display_name,
+        "chat_type": chat_type,
+        "is_group": is_group,
+        "unread": item.get("unread", ""),
+        "last_message_at": epoch_to_iso(parse_epoch(item.get("timestamp") or item.get("time"))),
+        "aliases": sorted(aliases),
+        "matched": True,
+    }
+
+
+def minimal_wx_session(chat_id: str, *, matched: bool = False) -> dict[str, Any]:
+    is_group = chat_id.endswith("@chatroom")
+    return {
+        "username": chat_id,
+        "display_name": chat_id,
+        "chat_type": "group" if is_group else "single",
+        "is_group": is_group,
+        "unread": "",
+        "last_message_at": "",
+        "aliases": [chat_id],
+        "matched": matched,
+    }
+
+
+def format_wx_session_candidate(item: dict[str, Any]) -> str:
+    return (
+        f"{item.get('username') or '-'}"
+        f"  name={item.get('display_name') or '-'}"
+        f"  type={item.get('chat_type') or '-'}"
+        f"  unread={item.get('unread') if item.get('unread') != '' else '-'}"
+    )
+
+
+def die_wx_session_candidates(reason: str, matches: list[dict[str, Any]]) -> None:
+    details = "\n".join("  - " + format_wx_session_candidate(item) for item in matches[:20])
+    if len(matches) > 20:
+        details += f"\n  ... and {len(matches) - 20} more"
+    die(reason + ("\nCandidates:\n" + details if details else ""))
+
+
+def resolve_wx_session(
+    sessions: list[dict[str, Any]],
+    *,
+    chat_id: str | None = None,
+    chat_name: str | None = None,
+) -> dict[str, Any]:
+    normalized = [
+        normalize_wx_session(item)
+        for item in sessions
+        if not is_placeholder_wx_session(item)
+    ]
+    if chat_id:
+        exact = [item for item in normalized if chat_id in set(item.get("aliases", []))]
+        if len(exact) == 1:
+            return exact[0]
+        if len(exact) > 1:
+            die_wx_session_candidates(f"Multiple sessions matched chat id {chat_id!r}; use a unique username.", exact)
+        if chat_id.startswith("@placeholder"):
+            die(f"Refusing to import placeholder/folded wx-cli session: {chat_id}")
+        return minimal_wx_session(chat_id)
+
+    if not chat_name:
+        die("A chat id or chat name is required")
+
+    exact = [
+        item for item in normalized
+        if chat_name == item.get("display_name") or chat_name == item.get("username")
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        die_wx_session_candidates(
+            f"Multiple sessions matched chat name {chat_name!r}; rerun wx-sessions and pass --chat-id.",
+            exact,
+        )
+
+    needle = chat_name.lower()
+    fuzzy = [
+        item for item in normalized
+        if needle in str(item.get("display_name") or "").lower()
+        or needle in str(item.get("username") or "").lower()
+    ]
+    if len(fuzzy) == 1:
+        return fuzzy[0]
+    if len(fuzzy) > 1:
+        die_wx_session_candidates(
+            f"Multiple fuzzy sessions matched {chat_name!r}; rerun wx-sessions and pass --chat-id.",
+            fuzzy,
+        )
+    die(f"No wx-cli session matched {chat_name!r}. Run wx-sessions with a larger --limit or pass --chat-id.")
+
+
+def looks_like_chat_id(value: str) -> bool:
+    return (
+        value == "filehelper"
+        or value.endswith("@chatroom")
+        or value.startswith("wxid_")
+        or value.startswith("gh_")
+    )
+
+
 def wx_cli_message_array(data: Any) -> tuple[str, list[dict[str, Any]]]:
     if isinstance(data, list):
         return "wx-cli", [item for item in data if isinstance(item, dict)]
@@ -902,59 +1129,173 @@ def wx_cli_message_array(data: Any) -> tuple[str, list[dict[str, Any]]]:
     die("wx-cli JSON does not contain messages[]")
 
 
-def normalize_wx_cli_payload(data: Any, source_name: str = "wx-cli") -> tuple[str, list[dict[str, Any]]]:
+WX_CLI_RECOGNIZED_MESSAGE_KEYS = {
+    "timestamp", "create_time", "created_at", "createTime", "time_ts", "time", "datetime",
+    "sender", "sender_name", "senderDisplayName", "groupNickname", "from", "from_name", "talker",
+    "content", "text", "message", "parsedContent", "rawContent",
+    "type", "msg_type", "message_type", "local_type", "localType",
+    "media_path", "mediaPath", "media_url", "mediaUrl", "media_type", "mediaType",
+    "local_path", "localPath", "file_path", "filePath", "path",
+    "url", "linkUrl", "linkTitle", "title", "filename", "fileName",
+    "local_id", "localId", "id", "msg_id", "msgId", "platformMessageId", "serverId",
+}
+
+
+def wx_message_dedupe_key(message: dict[str, Any]) -> str:
+    local_id = str(message.get("local_id") or "")
+    if local_id:
+        return "local_id:" + local_id
+    digest = hashlib.sha1(
+        "\n".join([
+            str(message.get("create_time") or ""),
+            str(message.get("sender") or ""),
+            str(message.get("type_label") or ""),
+            str(message.get("content") or ""),
+            str(message.get("media_path") or ""),
+            str(message.get("media_url") or ""),
+        ]).encode("utf-8", errors="replace")
+    ).hexdigest()
+    return "fingerprint:" + digest
+
+
+def normalize_wx_cli_payload_with_audit(
+    data: Any,
+    source_name: str = "wx-cli",
+    since: str | None = None,
+    until: str | None = None,
+    initial_audit: dict[str, Any] | None = None,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     title, raw_messages = wx_cli_message_array(data)
     if title == "wx-cli":
         title = source_name
 
+    audit = {
+        "pages_fetched": 1,
+        "raw_message_count": len(raw_messages),
+        "normalized_count": 0,
+        "deduped_count": 0,
+        "filtered_count": 0,
+        "dropped_count": 0,
+        "first_message_at": "",
+        "last_message_at": "",
+        "warnings": [],
+        "raw_debug": {
+            "unknown_message_keys": [],
+            "date_filtered_out": 0,
+        },
+    }
+    if initial_audit:
+        for key, value in initial_audit.items():
+            if key == "warnings":
+                audit["warnings"].extend(value)
+            elif key == "raw_debug" and isinstance(value, dict):
+                audit["raw_debug"].update(value)
+            else:
+                audit[key] = value
+        audit["raw_message_count"] = len(raw_messages)
+
+    unknown_keys: set[str] = set(audit["raw_debug"].get("unknown_message_keys", []))
     messages: list[dict[str, Any]] = []
     for item in raw_messages:
+        unknown_keys.update(set(item.keys()) - WX_CLI_RECOGNIZED_MESSAGE_KEYS)
         ts = (
-            parse_epoch(item.get("timestamp"))
-            or parse_epoch(item.get("create_time"))
-            or parse_epoch(item.get("time_ts"))
-            or parse_epoch(item.get("time"))
-            or parse_epoch(item.get("datetime"))
+            parse_epoch(first_present(item, "timestamp", "create_time", "created_at", "createTime", "time_ts"))
+            or parse_epoch(first_present(item, "time", "datetime"))
         )
         if ts is None:
+            audit["dropped_count"] += 1
             continue
 
         sender = (
-            item.get("sender")
-            or item.get("sender_name")
-            or item.get("from")
-            or item.get("from_name")
-            or item.get("talker")
+            first_present(item, "sender", "sender_name", "senderDisplayName", "groupNickname")
+            or first_present(item, "from", "from_name", "talker")
             or "unknown"
         )
-        content = item.get("content") or item.get("text") or item.get("message") or ""
+        content = first_present(item, "content", "text", "message", "parsedContent", "rawContent")
         if isinstance(content, (dict, list)):
             content = json.dumps(content, ensure_ascii=False, indent=2)
-        type_label = str(item.get("type") or item.get("msg_type") or item.get("local_type") or "message")
-        media_path = (
-            item.get("media_path")
-            or item.get("mediaPath")
-            or item.get("local_path")
-            or item.get("localPath")
-            or item.get("file_path")
-            or item.get("filePath")
-            or ""
+        if content is None:
+            link_title = first_present(item, "linkTitle", "title")
+            link_url = first_present(item, "linkUrl", "url")
+            filename = first_present(item, "filename", "fileName")
+            if link_title or link_url:
+                content = markdown_link(str(link_title or link_url), html.unescape(str(link_url or "")))
+            elif filename:
+                content = f"[文件] {filename}"
+            else:
+                content = ""
+
+        local_type = first_present(item, "local_type", "localType")
+        type_value = first_present(item, "type", "msg_type", "message_type")
+        type_label = str(type_value or message_type_label(local_type))
+        media_path = first_present(
+            item,
+            "media_path",
+            "mediaPath",
+            "local_path",
+            "localPath",
+            "file_path",
+            "filePath",
+            "path",
         )
-        media_url = item.get("media_url") or item.get("url") or ""
+        media_url = first_present(item, "media_url", "mediaUrl", "url", "linkUrl")
+        media_type = first_present(item, "media_type", "mediaType") or type_label
+        local_id = first_present(item, "local_id", "localId", "id", "msg_id", "msgId", "platformMessageId", "serverId")
 
         messages.append({
             "create_time": ts,
-            "local_id": str(item.get("local_id") or item.get("id") or ""),
+            "local_id": str(local_id or ""),
             "type_label": type_label,
-            "local_type": item.get("local_type"),
+            "local_type": local_type,
             "sender": str(sender),
             "content": normalize_text_for_markdown(content),
             "media_path": str(media_path) if media_path else "",
             "media_url": str(media_url) if media_url else "",
-            "media_type": type_label,
+            "media_type": str(media_type) if media_type else "",
         })
 
     messages.sort(key=lambda item: (item["create_time"], item.get("local_id") or ""))
+    audit["normalized_count"] = len(messages)
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    duplicates = 0
+    for message in messages:
+        key = wx_message_dedupe_key(message)
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        deduped.append(message)
+    if duplicates:
+        audit["warnings"].append(f"Dropped {duplicates} duplicate wx-cli messages during import.")
+    audit["deduped_count"] = len(deduped)
+
+    since_ts = parse_date(since) if since else None
+    until_ts = parse_date(until, exclusive_end=True) if until else None
+    if since_ts and until_ts and since_ts >= until_ts:
+        die("--since must be earlier than --until")
+    filtered = [
+        item for item in deduped
+        if (since_ts is None or item["create_time"] >= since_ts)
+        and (until_ts is None or item["create_time"] < until_ts)
+    ]
+    audit["filtered_count"] = len(filtered)
+    audit["raw_debug"]["date_filtered_out"] = len(deduped) - len(filtered)
+    audit["raw_debug"]["unknown_message_keys"] = sorted(unknown_keys)
+    if unknown_keys:
+        audit["warnings"].append("Unknown wx-cli message keys observed: " + ", ".join(sorted(unknown_keys)))
+    if audit["dropped_count"]:
+        audit["warnings"].append(f"Dropped {audit['dropped_count']} wx-cli messages without a parseable timestamp.")
+    if filtered:
+        audit["first_message_at"] = epoch_to_iso(filtered[0]["create_time"])
+        audit["last_message_at"] = epoch_to_iso(filtered[-1]["create_time"])
+
+    return title, filtered, audit
+
+
+def normalize_wx_cli_payload(data: Any, source_name: str = "wx-cli") -> tuple[str, list[dict[str, Any]]]:
+    title, messages, _audit = normalize_wx_cli_payload_with_audit(data, source_name)
     return title, messages
 
 
@@ -1045,6 +1386,7 @@ def export_weflow_messages(
     copy_media: bool = True,
     source_label: str = "weflow",
     manifest_name: str = "_weflow_import_manifest.json",
+    manifest_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     since_ts = parse_date(since) if since else None
     until_ts = parse_date(until, exclusive_end=True) if until else None
@@ -1096,6 +1438,8 @@ def export_weflow_messages(
         "day_files_skipped": skipped,
         "media_copied": copied_media,
     }
+    if manifest_extra:
+        manifest.update(manifest_extra)
     (out_root / manifest_name).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -1288,16 +1632,32 @@ def cmd_import_weflow_api(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_wx_cli_json(args: argparse.Namespace, command: str) -> Any:
-    kind, executable = resolve_wx_cli(getattr(args, "cli", "auto"), getattr(args, "binary", None))
+def run_wx_cli_json(
+    args: argparse.Namespace,
+    command: str,
+    *,
+    chat: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    cli_resolved: tuple[str, str] | None = None,
+    save_raw: bool = True,
+) -> Any:
+    kind, executable = cli_resolved or resolve_wx_cli(getattr(args, "cli", "auto"), getattr(args, "binary", None))
+    effective_limit = limit if limit is not None else getattr(args, "limit", 100)
     if command == "sessions":
         if kind == "wx":
-            cmd = [executable, "sessions", "-n", str(args.limit), "--json"]
+            cmd = [executable, "sessions", "-n", str(effective_limit), "--json"]
         else:
-            cmd = [executable, "sessions", "--limit", str(args.limit), "--format", "json"]
+            cmd = [executable, "sessions", "--limit", str(effective_limit), "--format", "json"]
     else:
+        history_chat = chat or getattr(args, "chat", None)
+        if not history_chat:
+            die("A chat id/name is required for wx-cli history")
         if kind == "wx":
-            cmd = [executable, "history", args.chat, "-n", str(args.limit), "--json"]
+            cmd = [executable, "history", history_chat, "-n", str(effective_limit)]
+            if offset is not None:
+                cmd.extend(["--offset", str(offset)])
+            cmd.append("--json")
             if args.since:
                 cmd.extend(["--since", args.since])
             if args.until:
@@ -1306,7 +1666,9 @@ def run_wx_cli_json(args: argparse.Namespace, command: str) -> Any:
             # if getattr(args, "media", False):
             #     cmd.append("--media")
         else:
-            cmd = [executable, "history", args.chat, "--limit", str(args.limit), "--format", "json"]
+            cmd = [executable, "history", history_chat, "--limit", str(effective_limit), "--format", "json"]
+            if offset is not None:
+                cmd.extend(["--offset", str(offset)])
             if args.since:
                 cmd.extend(["--start-time", args.since])
             if args.until:
@@ -1324,11 +1686,100 @@ def run_wx_cli_json(args: argparse.Namespace, command: str) -> Any:
             + "\nSTDERR:\n"
             + result.stderr
         )
-    if getattr(args, "raw_output", None):
+    if save_raw and getattr(args, "raw_output", None):
         raw_path = expand_path(args.raw_output)
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         raw_path.write_text(result.stdout, encoding="utf-8")
     return load_json_maybe_wrapped(result.stdout)
+
+
+def resolve_import_wx_session(args: argparse.Namespace) -> tuple[str, dict[str, Any], list[str]]:
+    chat_id = getattr(args, "chat_id", None) or None
+    chat_name = getattr(args, "chat_name", None) or None
+    legacy_chat = getattr(args, "chat", None) or None
+    if not chat_id and not chat_name and legacy_chat:
+        if looks_like_chat_id(legacy_chat):
+            chat_id = legacy_chat
+        else:
+            chat_name = legacy_chat
+    if not chat_id and not chat_name:
+        die("--chat-id, --chat-name, or --chat is required unless --input-json is provided")
+
+    raw_ref = chat_id or chat_name or legacy_chat or ""
+    warnings: list[str] = []
+    if not getattr(args, "resolve_chat", True):
+        warnings.append("Chat resolution disabled; importing with the raw chat reference.")
+        return raw_ref, minimal_wx_session(raw_ref), warnings
+
+    sessions_data = run_wx_cli_json(args, "sessions", limit=getattr(args, "session_limit", 500), save_raw=False)
+    sessions = extract_wx_sessions(sessions_data)
+    if not sessions:
+        if chat_id:
+            warnings.append("wx-sessions returned no usable sessions; importing the exact --chat-id without metadata.")
+            return chat_id, minimal_wx_session(chat_id), warnings
+        die("wx-sessions returned no usable sessions; pass --chat-id with --no-resolve-chat to import a known id.")
+
+    resolved = resolve_wx_session(sessions, chat_id=chat_id, chat_name=chat_name)
+    if chat_id and not resolved.get("matched"):
+        warnings.append("Exact --chat-id was not present in recent wx-sessions output; metadata is incomplete.")
+    return str(resolved["username"]), resolved, warnings
+
+
+def fetch_wx_cli_history(args: argparse.Namespace, chat_ref: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    cli_resolved = resolve_wx_cli(getattr(args, "cli", "auto"), getattr(args, "binary", None))
+    kind, _executable = cli_resolved
+    max_messages = int(getattr(args, "max_messages", None) or getattr(args, "limit", 5000))
+    page_size = int(getattr(args, "page_size", None) or min(max_messages, 500))
+    if max_messages <= 0:
+        die("--max-messages/--limit must be greater than 0")
+    if page_size <= 0:
+        die("--page-size must be greater than 0")
+
+    raw_messages: list[dict[str, Any]] = []
+    raw_pages: list[dict[str, Any]] = []
+    page_summaries: list[dict[str, Any]] = []
+    offset = 0
+    pages_fetched = 0
+    while len(raw_messages) < max_messages:
+        current_limit = min(page_size, max_messages - len(raw_messages))
+        data = run_wx_cli_json(
+            args,
+            "history",
+            chat=chat_ref,
+            limit=current_limit,
+            offset=offset if kind == "wx" else None,
+            cli_resolved=cli_resolved,
+            save_raw=False,
+        )
+        _title, page_messages = wx_cli_message_array(data)
+        pages_fetched += 1
+        page_summaries.append({"offset": offset, "limit": current_limit, "count": len(page_messages)})
+        raw_pages.append({"offset": offset, "limit": current_limit, "count": len(page_messages), "data": data})
+        raw_messages.extend(page_messages[:current_limit])
+
+        if kind != "wx" or len(page_messages) < current_limit or not page_messages:
+            break
+        offset += current_limit
+
+    if getattr(args, "raw_output", None):
+        raw_path = expand_path(args.raw_output)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(
+            json.dumps({"chat": chat_ref, "pages": raw_pages}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    return (
+        {"chat": chat_ref, "messages": raw_messages},
+        {
+            "pages_fetched": pages_fetched,
+            "page_size": page_size,
+            "max_messages": max_messages,
+            "page_summaries": page_summaries,
+            "raw_debug": {"page_summaries": page_summaries},
+            "warnings": [] if kind == "wx" else ["Pagination is best-effort for non-wx wechat-cli binaries."],
+        },
+    )
 
 
 def cmd_wx_sessions(args: argparse.Namespace) -> int:
@@ -1336,8 +1787,8 @@ def cmd_wx_sessions(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
-    sessions = data.get("sessions") if isinstance(data, dict) else data
-    if not isinstance(sessions, list):
+    sessions = extract_wx_sessions(data)
+    if not sessions:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
     print(f"{'unread':>8}  {'id/username':<42}  name")
@@ -1355,6 +1806,9 @@ def cmd_wx_sessions(args: argparse.Namespace) -> int:
 
 
 def cmd_import_wx_cli(args: argparse.Namespace) -> int:
+    resolved_session: dict[str, Any]
+    fetch_audit: dict[str, Any] = {}
+    resolve_warnings: list[str] = []
     if args.input_json:
         input_path = expand_path(args.input_json)
         if not input_path.exists():
@@ -1362,27 +1816,49 @@ def cmd_import_wx_cli(args: argparse.Namespace) -> int:
         data = load_json_maybe_wrapped(input_path.read_text(encoding="utf-8"))
         source_json: Path | None = input_path
         source_name = input_path.stem
+        preview_title, _preview_messages = wx_cli_message_array(data)
+        resolved_session = minimal_wx_session(preview_title if preview_title != "wx-cli" else source_name)
     else:
-        if not args.chat:
-            die("--chat is required unless --input-json is provided")
-        data = run_wx_cli_json(args, "history")
+        chat_ref, resolved_session, resolve_warnings = resolve_import_wx_session(args)
+        data, fetch_audit = fetch_wx_cli_history(args, chat_ref)
         source_json = None
-        source_name = args.chat
+        source_name = str(resolved_session.get("display_name") or chat_ref)
 
-    title, messages = normalize_wx_cli_payload(data, source_name)
-    manifest = export_weflow_messages(
-        messages,
-        args.title or args.subfolder or title or args.chat or "wx-cli",
-        expand_path(args.vault),
-        args.folder,
-        args.subfolder,
-        args.mode,
+    title, messages, audit = normalize_wx_cli_payload_with_audit(
+        data,
+        source_name,
         args.since,
         args.until,
+        fetch_audit,
+    )
+    audit["warnings"].extend(resolve_warnings)
+    audit["resolved_session"] = {
+        "username": resolved_session.get("username", ""),
+        "display_name": resolved_session.get("display_name", ""),
+        "chat_type": resolved_session.get("chat_type", ""),
+        "is_group": bool(resolved_session.get("is_group")),
+        "matched": bool(resolved_session.get("matched")),
+        "last_message_at": resolved_session.get("last_message_at", ""),
+    }
+    manifest = export_weflow_messages(
+        messages,
+        args.title
+        or args.subfolder
+        or str(resolved_session.get("display_name") or "")
+        or title
+        or getattr(args, "chat", None)
+        or "wx-cli",
+        expand_path(args.vault),
+        args.folder,
+        args.subfolder or safe_segment(str(resolved_session.get("display_name") or title)),
+        args.mode,
+        None,
+        None,
         source_json=source_json,
         copy_media=not args.no_media_copy,
         source_label="wx-cli",
         manifest_name="_wx_cli_import_manifest.json",
+        manifest_extra=audit,
     )
     if args.json:
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -1808,7 +2284,9 @@ def build_parser() -> argparse.ArgumentParser:
     wx_sessions.set_defaults(func=cmd_wx_sessions)
 
     wx_cli = sub.add_parser("import-wx-cli", help="Import messages from jackwener/wx-cli or local wechat-cli into Obsidian")
-    wx_cli.add_argument("--chat", help="Chat/group name or id; required unless --input-json is used")
+    wx_cli.add_argument("--chat", help="Backward-compatible chat/group name or id; names are resolved before import")
+    wx_cli.add_argument("--chat-id", help="Exact wx-cli username/id, e.g. filehelper, wxid_*, or *@chatroom")
+    wx_cli.add_argument("--chat-name", help="Display name to resolve through wx-sessions before import")
     wx_cli.add_argument("--input-json", help="Existing wx-cli/wechat-cli history JSON file")
     wx_cli.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="CLI command to use")
     wx_cli.add_argument("--binary", help="Explicit wx/wechat-cli binary path")
@@ -1818,7 +2296,12 @@ def build_parser() -> argparse.ArgumentParser:
     wx_cli.add_argument("--title", help="Override note title")
     wx_cli.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
     wx_cli.add_argument("--until", help="Inclusive end date, YYYY-MM-DD")
-    wx_cli.add_argument("--limit", type=int, default=5000, help="Maximum messages to read")
+    wx_cli.add_argument("--limit", type=int, default=5000, help="Backward-compatible maximum messages to read")
+    wx_cli.add_argument("--max-messages", type=int, help="Maximum messages to fetch across all wx-cli pages")
+    wx_cli.add_argument("--page-size", type=int, default=500, help="Messages to request per wx history page")
+    wx_cli.add_argument("--session-limit", type=int, default=500, help="Maximum wx-sessions rows used while resolving chat names")
+    wx_cli.add_argument("--resolve-chat", dest="resolve_chat", action="store_true", default=True, help="Resolve names through wx-sessions before import")
+    wx_cli.add_argument("--no-resolve-chat", dest="resolve_chat", action="store_false", help="Use the raw --chat/--chat-id value without wx-sessions resolution")
     wx_cli.add_argument("--media", action="store_true", help="Ask CLI to resolve media paths when supported")
     wx_cli.add_argument("--mode", choices=["overwrite", "skip"], default="overwrite", help="Daily file write mode")
     wx_cli.add_argument("--no-media-copy", action="store_true", help="Reference media in place instead of copying files")

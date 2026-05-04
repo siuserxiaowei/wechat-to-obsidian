@@ -32,19 +32,23 @@ sudo wx init
 List sessions:
 
 ```bash
-python3 scripts/wechat2obsidian.py wx-sessions --limit 100
+python3 scripts/wechat2obsidian.py wx-sessions --limit 500 --json
 ```
+
+Prefer the unique `username` from `wx-sessions` (`filehelper`, `wxid_*`, or `*@chatroom`). Group display names can duplicate; importing by name now resolves first and stops on ambiguous matches.
 
 Import File Transfer Assistant:
 
 ```bash
 python3 scripts/wechat2obsidian.py import-wx-cli \
-  --chat filehelper \
+  --chat-id filehelper \
   --vault ~/Documents/Obsidian \
   --folder "微信渠道" \
   --subfolder "文件传输助手" \
   --since YYYY-MM-DD \
   --until YYYY-MM-DD \
+  --page-size 500 \
+  --max-messages 20000 \
   --media
 ```
 
@@ -52,11 +56,15 @@ Import a group or friend:
 
 ```bash
 python3 scripts/wechat2obsidian.py import-wx-cli \
-  --chat "群名称或 wxid/chatroom id" \
+  --chat-id "群 chatroom id 或 wxid" \
   --vault ~/Documents/Obsidian \
   --folder "微信渠道" \
-  --subfolder "重要群聊/群名"
+  --subfolder "重要群聊/群名" \
+  --page-size 500 \
+  --max-messages 50000
 ```
+
+Use `--chat-name "群名称"` only when the name resolves to one session. The wx-cli manifest records `resolved_session`, pagination counts, dedupe/filter counts, first/last message time, warnings, and raw field diagnostics.
 
 ## Local wechat-cli Package Fallback
 

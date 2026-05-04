@@ -44,11 +44,24 @@ Msg_<md5(target_id)>
 Examples:
 
 ```text
-filehelper -> Msg_9e20f4783836bdbf1112e2707878b8d8
+filehelper -> Msg_9e20f478899dc29eb19741386f9343c8
 12345@chatroom -> Msg_<md5("12345@chatroom")>
 ```
 
 `Name2Id` usually maps a WeChat `user_name` to the corresponding session id. Use `list-targets` first instead of guessing target ids.
+
+## wx-cli Session Accuracy
+
+`wx history <CHAT>` supports fuzzy matching, so display names are not safe identifiers when multiple groups share a name. Prefer this flow:
+
+```bash
+python3 scripts/wechat2obsidian.py wx-sessions --limit 500 --json
+python3 scripts/wechat2obsidian.py import-wx-cli --chat-id "12345@chatroom" ...
+```
+
+`import-wx-cli` resolves `--chat-name` through `wx-sessions` and refuses ambiguous matches. It also fetches `wx history` page by page with `--offset`, deduplicates messages by `local_id` or a timestamp/sender/content fingerprint, then writes audit fields to `_wx_cli_import_manifest.json`: `resolved_session`, `pages_fetched`, `raw_message_count`, `deduped_count`, `filtered_count`, `dropped_count`, `first_message_at`, `last_message_at`, `warnings`, and `raw_debug`.
+
+If multiple `wxid_*` directories exist under `xwechat_files`, `locate-user` and `doctor` list the candidates with key database status instead of guessing the largest directory. Pass the intended path explicitly with `--base` or `--wechat-root` when using direct DB export.
 
 ## Message Types
 
