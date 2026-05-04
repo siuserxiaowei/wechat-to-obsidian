@@ -10,7 +10,7 @@ Default WeChat 4.x data root:
 ~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files
 ```
 
-Each logged-in user normally appears as a `wxid_*` directory. The CLI chooses the largest user directory when more than one is present; pass `--base` to `locate-user` or `--wechat-root` to `export-chat` when the auto choice is wrong.
+Each logged-in user normally appears as a `wxid_*` directory. When more than one account directory is present, `doctor` and `locate-user` list candidates with modification time and key database status instead of treating the largest directory as authoritative. Pass `--base` to `locate-user` or `--wechat-root` to `export-chat` when using direct DB export.
 
 Common databases:
 
@@ -62,6 +62,31 @@ python3 scripts/wechat2obsidian.py import-wx-cli --chat-id "12345@chatroom" ...
 `import-wx-cli` resolves `--chat-name` through `wx-sessions` and refuses ambiguous matches. It also fetches `wx history` page by page with `--offset`, deduplicates messages by `local_id` or a timestamp/sender/content fingerprint, then writes audit fields to `_wx_cli_import_manifest.json`: `resolved_session`, `pages_fetched`, `raw_message_count`, `deduped_count`, `filtered_count`, `dropped_count`, `first_message_at`, `last_message_at`, `warnings`, and `raw_debug`.
 
 If multiple `wxid_*` directories exist under `xwechat_files`, `locate-user` and `doctor` list the candidates with key database status instead of guessing the largest directory. Pass the intended path explicitly with `--base` or `--wechat-root` when using direct DB export.
+
+## Provider Adapter Notes
+
+`scripts/wechat2obsidian.py import-wechat` routes all provider output through the same normalizer, deduper, Markdown writer, and manifest writer. The current providers are:
+
+| Provider | Status | Notes |
+| --- | --- | --- |
+| `wx-cli` | Default | Wraps `jackwener/wx-cli`; supports exact session resolution and paged `wx history` imports. |
+| `wechat-decrypt` | HTTP adapter | Talks to a local service, default `http://127.0.0.1:5678`; useful when WeChat 4.x breaks wx-cli compatibility. |
+| `wechat-mcp-macos` | Detection only | Checks command/config readiness and reports next steps; direct import is marked unsupported until the MCP stdio wrapper is stable. |
+
+Provider manifest fields include `provider`, `provider_version`, `provider_capabilities`, `resolved_session`, `pages_fetched`, `raw_message_count`, `deduped_count`, `filtered_count`, `dropped_count`, `first_message_at`, `last_message_at`, `warnings`, and `raw_debug`. Unknown provider fields are summarized in `raw_debug` instead of being silently discarded.
+
+Safety defaults:
+
+- Only read local user data.
+- Do not upload raw output, keys, decrypted databases, attachments, or generated vault contents.
+- Do not save provider raw responses unless the user explicitly passes `--raw-output`.
+- Prefer exact `wxid_*`, `filehelper`, or `*@chatroom` identifiers over display names.
+
+Backend risk notes:
+
+- PyWxDump and the original `sjzar/chatlog` repository are not default dependencies because of maintenance and compliance risk.
+- `chatlog_alpha` is currently biased toward Windows usage and is not a macOS default.
+- WDecipher explicitly does not support macOS and is excluded from the provider set.
 
 ## Message Types
 

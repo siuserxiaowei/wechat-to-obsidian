@@ -985,7 +985,12 @@ def normalize_wx_session(item: dict[str, Any]) -> dict[str, Any]:
         or username
     )
     chat_type = str(first_present(item, "chat_type", "type") or "")
-    is_group = bool(item.get("is_group")) or username.endswith("@chatroom") or chat_type == "group"
+    is_group = (
+        bool(item.get("is_group"))
+        or bool(item.get("isChatRoom"))
+        or username.endswith("@chatroom")
+        or chat_type == "group"
+    )
     if not chat_type:
         chat_type = "group" if is_group else "single"
     aliases = {
@@ -996,6 +1001,8 @@ def normalize_wx_session(item: dict[str, Any]) -> dict[str, Any]:
             str(item.get("name") or ""),
             str(item.get("display_name") or ""),
             str(item.get("displayName") or ""),
+            str(item.get("talker") or ""),
+            str(item.get("talkerName") or ""),
         )
         if value
     }
@@ -1005,7 +1012,9 @@ def normalize_wx_session(item: dict[str, Any]) -> dict[str, Any]:
         "chat_type": chat_type,
         "is_group": is_group,
         "unread": item.get("unread", ""),
-        "last_message_at": epoch_to_iso(parse_epoch(item.get("timestamp") or item.get("time"))),
+        "last_message_at": epoch_to_iso(parse_epoch(
+            item.get("timestamp") or item.get("time") or item.get("lastTime") or item.get("last_message_at")
+        )),
         "aliases": sorted(aliases),
         "matched": True,
     }
@@ -1131,13 +1140,14 @@ def wx_cli_message_array(data: Any) -> tuple[str, list[dict[str, Any]]]:
 
 WX_CLI_RECOGNIZED_MESSAGE_KEYS = {
     "timestamp", "create_time", "created_at", "createTime", "time_ts", "time", "datetime",
-    "sender", "sender_name", "senderDisplayName", "groupNickname", "from", "from_name", "talker",
+    "sender", "sender_name", "senderDisplayName", "senderName", "groupNickname", "from", "from_name", "talker",
+    "talkerName", "isChatRoom", "isSelf", "subType", "contents",
     "content", "text", "message", "parsedContent", "rawContent",
     "type", "msg_type", "message_type", "local_type", "localType",
     "media_path", "mediaPath", "media_url", "mediaUrl", "media_type", "mediaType",
     "local_path", "localPath", "file_path", "filePath", "path",
     "url", "linkUrl", "linkTitle", "title", "filename", "fileName",
-    "local_id", "localId", "id", "msg_id", "msgId", "platformMessageId", "serverId",
+    "local_id", "localId", "id", "seq", "msg_id", "msgId", "platformMessageId", "serverId",
 }
 
 
@@ -1207,7 +1217,7 @@ def normalize_wx_cli_payload_with_audit(
             continue
 
         sender = (
-            first_present(item, "sender", "sender_name", "senderDisplayName", "groupNickname")
+            first_present(item, "sender", "sender_name", "senderDisplayName", "senderName", "groupNickname")
             or first_present(item, "from", "from_name", "talker")
             or "unknown"
         )
@@ -1240,7 +1250,7 @@ def normalize_wx_cli_payload_with_audit(
         )
         media_url = first_present(item, "media_url", "mediaUrl", "url", "linkUrl")
         media_type = first_present(item, "media_type", "mediaType") or type_label
-        local_id = first_present(item, "local_id", "localId", "id", "msg_id", "msgId", "platformMessageId", "serverId")
+        local_id = first_present(item, "local_id", "localId", "id", "seq", "msg_id", "msgId", "platformMessageId", "serverId")
 
         messages.append({
             "create_time": ts,
@@ -1782,6 +1792,420 @@ def fetch_wx_cli_history(args: argparse.Namespace, chat_ref: str) -> tuple[dict[
     )
 
 
+def provider_http_get_json(base_url: str, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+    clean_base = base_url.rstrip("/")
+    query = {
+        k: v
+        for k, v in params.items()
+        if v is not None and v != "" and v is not False
+    }
+    url = f"{clean_base}{endpoint}"
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    return data if isinstance(data, dict) else {"messages": data}
+
+
+def provider_payload_messages(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ("messages", "history", "items", "records", "rows"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    for key in ("data", "result"):
+        nested = data.get(key)
+        if isinstance(nested, list):
+            return [item for item in nested if isinstance(item, dict)]
+        if isinstance(nested, dict):
+            found = provider_payload_messages(nested)
+            if found:
+                return found
+    return []
+
+
+def provider_payload_sessions(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ("sessions", "chatrooms", "chats", "contacts", "items", "rows"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    for key in ("data", "result"):
+        nested = data.get(key)
+        if isinstance(nested, list):
+            return [item for item in nested if isinstance(item, dict)]
+        if isinstance(nested, dict):
+            found = provider_payload_sessions(nested)
+            if found:
+                return found
+    return []
+
+
+def date_to_provider_epoch(value: str | None, *, exclusive_end: bool = False) -> int | None:
+    return parse_date(value, exclusive_end=exclusive_end) if value else None
+
+
+class WechatProvider:
+    name = "provider"
+    capabilities: list[str] = []
+    default_base_url = ""
+
+    def doctor(self, args: argparse.Namespace) -> dict[str, Any]:
+        return {
+            "provider": self.name,
+            "ok": False,
+            "detail": "Provider does not implement doctor()",
+            "capabilities": self.capabilities,
+        }
+
+    def version(self, args: argparse.Namespace) -> str:
+        return ""
+
+    def list_sessions(self, args: argparse.Namespace, limit: int, keyword: str | None = None) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    def fetch_messages(self, args: argparse.Namespace, chat_ref: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        raise NotImplementedError
+
+
+class WxCliProvider(WechatProvider):
+    name = "wx-cli"
+    capabilities = ["sessions", "history", "pagination", "media-paths-best-effort"]
+
+    def doctor(self, args: argparse.Namespace) -> dict[str, Any]:
+        try:
+            kind, executable = resolve_wx_cli(getattr(args, "cli", "auto"), getattr(args, "binary", None))
+            version = self.version(args)
+            detail = f"{kind} at {executable}" + (f" ({version})" if version else "")
+            ok = True
+        except SystemExit as exc:
+            detail = str(exc)
+            ok = False
+        return {
+            "provider": self.name,
+            "ok": ok,
+            "detail": detail,
+            "capabilities": self.capabilities,
+        }
+
+    def version(self, args: argparse.Namespace) -> str:
+        try:
+            _kind, executable = resolve_wx_cli(getattr(args, "cli", "auto"), getattr(args, "binary", None))
+            result = subprocess.run(
+                [executable, "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            return (result.stdout or result.stderr).strip().splitlines()[0] if result.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    def list_sessions(self, args: argparse.Namespace, limit: int, keyword: str | None = None) -> list[dict[str, Any]]:
+        data = run_wx_cli_json(args, "sessions", limit=limit, save_raw=False)
+        sessions = [normalize_wx_session(item) for item in extract_wx_sessions(data) if not is_placeholder_wx_session(item)]
+        if keyword:
+            needle = keyword.lower()
+            sessions = [
+                item for item in sessions
+                if needle in str(item.get("username", "")).lower()
+                or needle in str(item.get("display_name", "")).lower()
+            ]
+        return sessions
+
+    def fetch_messages(self, args: argparse.Namespace, chat_ref: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        return fetch_wx_cli_history(args, chat_ref)
+
+
+class WechatDecryptProvider(WechatProvider):
+    name = "wechat-decrypt"
+    capabilities = ["http-api", "sessions", "history", "pagination"]
+    default_base_url = "http://127.0.0.1:5678"
+
+    def base_url(self, args: argparse.Namespace) -> str:
+        return (getattr(args, "base_url", None) or self.default_base_url).rstrip("/")
+
+    def doctor(self, args: argparse.Namespace) -> dict[str, Any]:
+        base_url = self.base_url(args)
+        try:
+            provider_http_get_json(base_url, "/api/history", {"limit": 1, "offset": 0})
+            return {
+                "provider": self.name,
+                "ok": True,
+                "detail": f"Reachable at {base_url}",
+                "capabilities": self.capabilities,
+            }
+        except Exception as exc:
+            return {
+                "provider": self.name,
+                "ok": False,
+                "detail": (
+                    f"Start wechat-decrypt HTTP service, e.g. python main.py, and confirm {base_url}; "
+                    f"last error: {exc}"
+                ),
+                "capabilities": self.capabilities,
+            }
+
+    def list_sessions(self, args: argparse.Namespace, limit: int, keyword: str | None = None) -> list[dict[str, Any]]:
+        base_url = self.base_url(args)
+        last_error = ""
+        for endpoint in ("/api/session", "/api/sessions", "/api/recent_sessions", "/api/chatroom", "/api/contact"):
+            try:
+                data = provider_http_get_json(base_url, endpoint, {"limit": limit, "keyword": keyword or ""})
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            sessions = provider_payload_sessions(data)
+            if sessions:
+                normalized = [normalize_wx_session(item) for item in sessions if not is_placeholder_wx_session(item)]
+                if keyword:
+                    needle = keyword.lower()
+                    normalized = [
+                        item for item in normalized
+                        if needle in str(item.get("username", "")).lower()
+                        or needle in str(item.get("display_name", "")).lower()
+                    ]
+                return normalized[:limit]
+        if last_error:
+            warn(f"wechat-decrypt session endpoints unavailable: {last_error}")
+        return []
+
+    def fetch_messages(self, args: argparse.Namespace, chat_ref: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        base_url = self.base_url(args)
+        max_messages = int(getattr(args, "max_messages", None) or getattr(args, "limit", 5000))
+        page_size = int(getattr(args, "page_size", None) or min(max_messages, 500))
+        if max_messages <= 0:
+            die("--max-messages/--limit must be greater than 0")
+        if page_size <= 0:
+            die("--page-size must be greater than 0")
+
+        raw_messages: list[dict[str, Any]] = []
+        raw_pages: list[dict[str, Any]] = []
+        page_summaries: list[dict[str, Any]] = []
+        offset = 0
+        pages_fetched = 0
+        while len(raw_messages) < max_messages:
+            current_limit = min(page_size, max_messages - len(raw_messages))
+            params = {
+                "chat": chat_ref,
+                "talker": chat_ref,
+                "limit": current_limit,
+                "offset": offset,
+                "since": date_to_provider_epoch(getattr(args, "since", None)),
+                "until": date_to_provider_epoch(getattr(args, "until", None), exclusive_end=True),
+                "format": "json",
+            }
+            data = provider_http_get_json(base_url, "/api/history", params)
+            page_messages = provider_payload_messages(data)
+            pages_fetched += 1
+            page_summaries.append({"offset": offset, "limit": current_limit, "count": len(page_messages)})
+            raw_pages.append({"offset": offset, "limit": current_limit, "count": len(page_messages), "data": data})
+            raw_messages.extend(page_messages[:current_limit])
+            if len(page_messages) < current_limit or not page_messages:
+                break
+            offset += current_limit
+
+        if getattr(args, "raw_output", None):
+            raw_path = expand_path(args.raw_output)
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_path.write_text(
+                json.dumps({"chat": chat_ref, "pages": raw_pages}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        return (
+            {"chat": chat_ref, "messages": raw_messages},
+            {
+                "pages_fetched": pages_fetched,
+                "page_size": page_size,
+                "max_messages": max_messages,
+                "page_summaries": page_summaries,
+                "raw_debug": {"page_summaries": page_summaries},
+                "warnings": [],
+            },
+        )
+
+
+class WechatMcpMacosProvider(WechatProvider):
+    name = "wechat-mcp-macos"
+    capabilities = ["mcp", "sessions", "history", "search", "detected-but-not-supported"]
+
+    def doctor(self, args: argparse.Namespace) -> dict[str, Any]:
+        executable = shutil.which("wechat-mcp-macos")
+        config = Path.home() / ".wechat-mcp" / "config.json"
+        if executable and config.exists():
+            detail = (
+                f"Detected {executable} and {config}; direct stdio MCP import is not implemented yet. "
+                "Use this doctor result to verify setup before wiring an MCP client."
+            )
+            ok = False
+        elif executable:
+            detail = f"Detected {executable}, but {config} is missing; run wechat-mcp-macos setup first."
+            ok = False
+        else:
+            detail = "wechat-mcp-macos command not found. Install with: uv tool install wechat-mcp-macos"
+            ok = False
+        return {
+            "provider": self.name,
+            "ok": ok,
+            "detail": detail,
+            "capabilities": self.capabilities,
+        }
+
+    def list_sessions(self, args: argparse.Namespace, limit: int, keyword: str | None = None) -> list[dict[str, Any]]:
+        die("wechat-mcp-macos provider is detected but direct MCP stdio import is not implemented yet.")
+
+    def fetch_messages(self, args: argparse.Namespace, chat_ref: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        die("wechat-mcp-macos provider is detected but direct MCP stdio import is not implemented yet.")
+
+
+def get_wechat_providers() -> dict[str, WechatProvider]:
+    providers: list[WechatProvider] = [
+        WxCliProvider(),
+        WechatDecryptProvider(),
+        WechatMcpMacosProvider(),
+    ]
+    return {provider.name: provider for provider in providers}
+
+
+def resolve_provider_session(
+    provider: WechatProvider,
+    args: argparse.Namespace,
+) -> tuple[str, dict[str, Any], list[str]]:
+    chat_id = getattr(args, "chat_id", None) or None
+    chat_name = getattr(args, "chat_name", None) or None
+    legacy_chat = getattr(args, "chat", None) or None
+    if not chat_id and not chat_name and legacy_chat:
+        if looks_like_chat_id(legacy_chat):
+            chat_id = legacy_chat
+        else:
+            chat_name = legacy_chat
+    if not chat_id and not chat_name:
+        die("--chat-id, --chat-name, or --chat is required")
+
+    raw_ref = chat_id or chat_name or legacy_chat or ""
+    warnings: list[str] = []
+    if not getattr(args, "resolve_chat", True):
+        warnings.append("Chat resolution disabled; importing with the raw chat reference.")
+        return raw_ref, minimal_wx_session(raw_ref), warnings
+
+    sessions = provider.list_sessions(args, getattr(args, "session_limit", 500), chat_name)
+    if not sessions:
+        if chat_id:
+            warnings.append(f"{provider.name} returned no usable sessions; importing the exact --chat-id without metadata.")
+            return chat_id, minimal_wx_session(chat_id), warnings
+        die(f"{provider.name} returned no usable sessions; pass --chat-id with --no-resolve-chat to import a known id.")
+    resolved = resolve_wx_session(sessions, chat_id=chat_id, chat_name=chat_name)
+    if chat_id and not resolved.get("matched"):
+        warnings.append(f"Exact --chat-id was not present in {provider.name} sessions output; metadata is incomplete.")
+    return str(resolved["username"]), resolved, warnings
+
+
+def provider_manifest_session(resolved_session: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "username": resolved_session.get("username", ""),
+        "display_name": resolved_session.get("display_name", ""),
+        "chat_type": resolved_session.get("chat_type", ""),
+        "is_group": bool(resolved_session.get("is_group")),
+        "matched": bool(resolved_session.get("matched")),
+        "last_message_at": resolved_session.get("last_message_at", ""),
+    }
+
+
+def import_with_provider(
+    args: argparse.Namespace,
+    provider: WechatProvider,
+    *,
+    manifest_name: str,
+) -> dict[str, Any]:
+    chat_ref, resolved_session, resolve_warnings = resolve_provider_session(provider, args)
+    data, fetch_audit = provider.fetch_messages(args, chat_ref)
+    source_name = str(resolved_session.get("display_name") or chat_ref)
+    title, messages, audit = normalize_wx_cli_payload_with_audit(
+        data,
+        source_name,
+        getattr(args, "since", None),
+        getattr(args, "until", None),
+        fetch_audit,
+    )
+    audit["warnings"].extend(resolve_warnings)
+    audit.update({
+        "provider": provider.name,
+        "provider_version": provider.version(args),
+        "provider_capabilities": provider.capabilities,
+        "resolved_session": provider_manifest_session(resolved_session),
+    })
+
+    return export_weflow_messages(
+        messages,
+        args.title
+        or args.subfolder
+        or str(resolved_session.get("display_name") or "")
+        or title
+        or chat_ref,
+        expand_path(args.vault),
+        args.folder,
+        args.subfolder or safe_segment(str(resolved_session.get("display_name") or title)),
+        args.mode,
+        None,
+        None,
+        source_json=None,
+        copy_media=not args.no_media_copy,
+        source_label=provider.name,
+        manifest_name=manifest_name,
+        manifest_extra=audit,
+    )
+
+
+def provider_doctor_rows(args: argparse.Namespace) -> list[dict[str, Any]]:
+    providers = get_wechat_providers()
+    selected = getattr(args, "provider", "all")
+    if selected != "all" and selected not in providers:
+        die(f"Unknown provider {selected!r}; available: {', '.join(sorted(providers))}")
+    names = sorted(providers) if selected == "all" else [selected]
+    return [providers[name].doctor(args) for name in names]
+
+
+def cmd_providers(args: argparse.Namespace) -> int:
+    rows = provider_doctor_rows(args)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    width = max(len(row["provider"]) for row in rows)
+    for row in rows:
+        status = "OK" if row.get("ok") else "MISS"
+        caps = ",".join(row.get("capabilities", []))
+        print(f"{row['provider']:<{width}}  {status:<4}  {caps}  {row.get('detail', '')}")
+    return 0
+
+
+def cmd_provider_doctor(args: argparse.Namespace) -> int:
+    return cmd_providers(args)
+
+
+def cmd_import_wechat(args: argparse.Namespace) -> int:
+    providers = get_wechat_providers()
+    provider = providers.get(args.provider)
+    if not provider:
+        die(f"Unknown provider {args.provider!r}; available: {', '.join(sorted(providers))}")
+    manifest = import_with_provider(args, provider, manifest_name="_wechat_import_manifest.json")
+    if args.json:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    else:
+        info(f"Imported {manifest['message_count']} messages from {provider.name}")
+        info(f"day_files_written={manifest['day_files_written']} skipped={manifest['day_files_skipped']}")
+        info(f"output={manifest['output']}")
+    return 0
+
+
 def cmd_wx_sessions(args: argparse.Namespace) -> int:
     data = run_wx_cli_json(args, "sessions")
     if args.json:
@@ -1840,6 +2264,11 @@ def cmd_import_wx_cli(args: argparse.Namespace) -> int:
         "matched": bool(resolved_session.get("matched")),
         "last_message_at": resolved_session.get("last_message_at", ""),
     }
+    audit.update({
+        "provider": "wx-cli",
+        "provider_version": WxCliProvider().version(args),
+        "provider_capabilities": WxCliProvider.capabilities,
+    })
     manifest = export_weflow_messages(
         messages,
         args.title
@@ -2274,6 +2703,49 @@ def build_parser() -> argparse.ArgumentParser:
     weflow_api.add_argument("--no-media-copy", action="store_true", help="Reference media in place instead of copying files")
     weflow_api.add_argument("--json", action="store_true", help="Print JSON summary")
     weflow_api.set_defaults(func=cmd_import_weflow_api)
+
+    providers = sub.add_parser("providers", help="List available WeChat reader providers and readiness")
+    providers.add_argument("--provider", choices=["all", "wx-cli", "wechat-decrypt", "wechat-mcp-macos"], default="all", help="Provider to inspect")
+    providers.add_argument("--base-url", default="http://127.0.0.1:5678", help="HTTP provider base URL")
+    providers.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="wx-cli command to inspect")
+    providers.add_argument("--binary", help="Explicit wx/wechat-cli binary path")
+    providers.add_argument("--json", action="store_true", help="Print JSON")
+    providers.set_defaults(func=cmd_providers)
+
+    provider_doctor = sub.add_parser("provider-doctor", help="Run provider readiness checks")
+    provider_doctor.add_argument("--provider", choices=["all", "wx-cli", "wechat-decrypt", "wechat-mcp-macos"], default="all", help="Provider to inspect")
+    provider_doctor.add_argument("--base-url", default="http://127.0.0.1:5678", help="HTTP provider base URL")
+    provider_doctor.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="wx-cli command to inspect")
+    provider_doctor.add_argument("--binary", help="Explicit wx/wechat-cli binary path")
+    provider_doctor.add_argument("--json", action="store_true", help="Print JSON")
+    provider_doctor.set_defaults(func=cmd_provider_doctor)
+
+    import_wechat = sub.add_parser("import-wechat", help="Import messages from a pluggable WeChat reader provider")
+    import_wechat.add_argument("--provider", choices=["wx-cli", "wechat-decrypt", "wechat-mcp-macos"], default="wx-cli", help="Reader provider")
+    import_wechat.add_argument("--chat", help="Backward-compatible chat/group name or id; names are resolved before import")
+    import_wechat.add_argument("--chat-id", help="Exact provider chat id, e.g. filehelper, wxid_*, or *@chatroom")
+    import_wechat.add_argument("--chat-name", help="Display name to resolve before import")
+    import_wechat.add_argument("--base-url", default="http://127.0.0.1:5678", help="HTTP provider base URL")
+    import_wechat.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="wx-cli command to use")
+    import_wechat.add_argument("--binary", help="Explicit wx/wechat-cli binary path")
+    import_wechat.add_argument("--vault", required=True, help="Obsidian vault root")
+    import_wechat.add_argument("--folder", default="聊天记录导出", help="Folder inside the vault")
+    import_wechat.add_argument("--subfolder", help="Subfolder inside --folder; defaults to chat title")
+    import_wechat.add_argument("--title", help="Override note title")
+    import_wechat.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
+    import_wechat.add_argument("--until", help="Inclusive end date, YYYY-MM-DD")
+    import_wechat.add_argument("--limit", type=int, default=5000, help="Backward-compatible maximum messages to read")
+    import_wechat.add_argument("--max-messages", type=int, help="Maximum messages to fetch across all pages")
+    import_wechat.add_argument("--page-size", type=int, default=500, help="Messages to request per provider page")
+    import_wechat.add_argument("--session-limit", type=int, default=500, help="Maximum session rows used while resolving chat names")
+    import_wechat.add_argument("--resolve-chat", dest="resolve_chat", action="store_true", default=True, help="Resolve names through provider sessions before import")
+    import_wechat.add_argument("--no-resolve-chat", dest="resolve_chat", action="store_false", help="Use the raw --chat/--chat-id value without session resolution")
+    import_wechat.add_argument("--media", action="store_true", help="Ask provider to resolve media paths when supported")
+    import_wechat.add_argument("--mode", choices=["overwrite", "skip"], default="overwrite", help="Daily file write mode")
+    import_wechat.add_argument("--no-media-copy", action="store_true", help="Reference media in place instead of copying files")
+    import_wechat.add_argument("--raw-output", help="Save raw provider output")
+    import_wechat.add_argument("--json", action="store_true", help="Print JSON summary")
+    import_wechat.set_defaults(func=cmd_import_wechat)
 
     wx_sessions = sub.add_parser("wx-sessions", help="List sessions from jackwener/wx-cli or local wechat-cli")
     wx_sessions.add_argument("--cli", choices=["auto", "wx", "wechat-cli"], default="auto", help="CLI command to use")

@@ -13,10 +13,21 @@ Only operate on the user's own local WeChat data. Do not upload decrypted databa
 
 Use this order:
 
-1. `jackwener/wx-cli`
-2. Local `wechat-cli-pkg.tar.gz` binary via `--binary`
-3. WeFlow JSON/API
-4. Direct WeChat DB mode
+1. Generic `import-wechat` provider entrypoint with `wx-cli`
+2. `wechat-decrypt` HTTP provider when wx-cli is incompatible
+3. Local `wechat-cli-pkg.tar.gz` binary via `--binary`
+4. WeFlow JSON/API
+5. Direct WeChat DB mode
+
+Inspect providers before choosing a backend:
+
+```bash
+python3 scripts/wechat2obsidian.py providers
+python3 scripts/wechat2obsidian.py provider-doctor --provider wx-cli
+python3 scripts/wechat2obsidian.py provider-doctor --provider wechat-decrypt --base-url http://127.0.0.1:5678
+```
+
+The provider abstraction exposes `doctor`, `list_sessions`, `fetch_messages`, and `capabilities`. It writes the same Obsidian Markdown and unified manifest regardless of backend. Do not save raw provider responses unless the user explicitly asks for `--raw-output`.
 
 ## wx-cli Route
 
@@ -40,7 +51,8 @@ Prefer the unique `username` from `wx-sessions` (`filehelper`, `wxid_*`, or `*@c
 Import File Transfer Assistant:
 
 ```bash
-python3 scripts/wechat2obsidian.py import-wx-cli \
+python3 scripts/wechat2obsidian.py import-wechat \
+  --provider wx-cli \
   --chat-id filehelper \
   --vault ~/Documents/Obsidian \
   --folder "微信渠道" \
@@ -55,7 +67,8 @@ python3 scripts/wechat2obsidian.py import-wx-cli \
 Import a group or friend:
 
 ```bash
-python3 scripts/wechat2obsidian.py import-wx-cli \
+python3 scripts/wechat2obsidian.py import-wechat \
+  --provider wx-cli \
   --chat-id "群 chatroom id 或 wxid" \
   --vault ~/Documents/Obsidian \
   --folder "微信渠道" \
@@ -65,6 +78,30 @@ python3 scripts/wechat2obsidian.py import-wx-cli \
 ```
 
 Use `--chat-name "群名称"` only when the name resolves to one session. The wx-cli manifest records `resolved_session`, pagination counts, dedupe/filter counts, first/last message time, warnings, and raw field diagnostics.
+
+The legacy `import-wx-cli` command remains supported and should keep existing behavior/tests working.
+
+## wechat-decrypt HTTP Provider
+
+Use when `wx-cli` cannot read the current WeChat version but `wechat-decrypt` can start its local Web/API service:
+
+```bash
+# In the wechat-decrypt checkout
+python3 main.py
+
+python3 scripts/wechat2obsidian.py import-wechat \
+  --provider wechat-decrypt \
+  --base-url http://127.0.0.1:5678 \
+  --chat-id "群 chatroom id 或 wxid" \
+  --vault ~/Documents/Obsidian \
+  --folder "微信渠道"
+```
+
+If the HTTP API is unreachable, run `provider-doctor --provider wechat-decrypt` and surface its repair hints. Keep all access local; do not upload keys, databases, attachments, or raw responses.
+
+## wechat-mcp-macos Provider
+
+`wechat-mcp-macos` is currently used for detection and doctor output. It checks whether the command and `~/.wechat-mcp/config.json` are present and reports next steps. Treat direct import as unsupported until a stable stdio wrapper is implemented.
 
 ## Local wechat-cli Package Fallback
 
@@ -111,6 +148,9 @@ Use direct DB mode only when wx-cli/wechat-cli/WeFlow cannot satisfy the task. I
 ## Common Tasks
 
 - List wx-cli sessions: `wx-sessions`.
+- List providers: `providers`.
+- Diagnose providers: `provider-doctor`.
+- Generic provider import: `import-wechat`.
 - Import from wx-cli: `import-wx-cli`.
 - Import from existing wx-cli JSON: `import-wx-cli --input-json history.json`.
 - Import existing WeFlow JSON: `import-weflow-json`.

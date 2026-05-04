@@ -1,11 +1,13 @@
 import datetime as dt
 import hashlib
 import importlib.util
+import io
 import json
 import sqlite3
 import subprocess
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -324,6 +326,199 @@ class WeChatToObsidianTests(unittest.TestCase):
             self.assertTrue(candidates[0]["databases"]["message_0.db"]["exists"])
             with self.assertRaises(SystemExit):
                 wechat2obsidian.pick_user_dir(base)
+
+    def test_provider_registry_exposes_expected_backends(self):
+        providers = wechat2obsidian.get_wechat_providers()
+        self.assertIn("wx-cli", providers)
+        self.assertIn("wechat-decrypt", providers)
+        self.assertIn("wechat-mcp-macos", providers)
+        self.assertIn("history", providers["wx-cli"].capabilities)
+        self.assertIn("http-api", providers["wechat-decrypt"].capabilities)
+        self.assertIn("mcp", providers["wechat-mcp-macos"].capabilities)
+
+    def test_import_wechat_with_wx_cli_provider_keeps_unified_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+
+            def fake_run(cmd, capture_output, text, encoding, errors):
+                offset = int(cmd[cmd.index("--offset") + 1])
+                pages = {
+                    0: [
+                        {
+                            "timestamp": int(dt.datetime(2026, 5, 3, 9, 0).timestamp()),
+                            "sender": "Alice",
+                            "content": "provider first",
+                            "type": "text",
+                            "local_id": 10,
+                        },
+                        {
+                            "timestamp": int(dt.datetime(2026, 5, 3, 9, 1).timestamp()),
+                            "sender": "Bob",
+                            "content": "provider second",
+                            "type": "text",
+                            "local_id": 11,
+                        },
+                    ],
+                    2: [],
+                }
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(pages[offset], ensure_ascii=False), "")
+
+            with mock.patch.object(wechat2obsidian, "resolve_wx_cli", return_value=("wx", "wx")):
+                with mock.patch.object(wechat2obsidian.subprocess, "run", side_effect=fake_run):
+                    code = wechat2obsidian.main([
+                        "import-wechat",
+                        "--provider",
+                        "wx-cli",
+                        "--chat-id",
+                        "333@chatroom",
+                        "--no-resolve-chat",
+                        "--page-size",
+                        "2",
+                        "--max-messages",
+                        "4",
+                        "--vault",
+                        str(vault),
+                        "--folder",
+                        "WeChat",
+                    ])
+            self.assertEqual(code, 0)
+
+            manifest = json.loads((vault / "WeChat" / "333@chatroom" / "_wechat_import_manifest.json").read_text())
+            self.assertEqual(manifest["source"], "wx-cli")
+            self.assertEqual(manifest["provider"], "wx-cli")
+            self.assertEqual(manifest["message_count"], 2)
+            self.assertEqual(manifest["pages_fetched"], 2)
+            self.assertEqual(manifest["resolved_session"]["username"], "333@chatroom")
+            self.assertIn("pagination", manifest["provider_capabilities"])
+
+    def test_import_wechat_from_wechat_decrypt_mock_http(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            vault.mkdir()
+
+            def fake_http(base_url, endpoint, params):
+                self.assertEqual(base_url, "http://127.0.0.1:5678")
+                if endpoint == "/api/session":
+                    return {
+                        "sessions": [
+                            {
+                                "id": "room@chatroom",
+                                "name": "Mock Room",
+                                "isChatRoom": True,
+                                "lastTime": int(dt.datetime(2026, 5, 4, 8, 2).timestamp()),
+                            }
+                        ]
+                    }
+                if endpoint == "/api/history":
+                    offset = int(params.get("offset") or 0)
+                    pages = {
+                        0: {
+                            "messages": [
+                                {
+                                    "seq": 1,
+                                    "time": "2026-05-04T08:00:00+08:00",
+                                    "talker": "room@chatroom",
+                                    "talkerName": "Mock Room",
+                                    "senderName": "Alice",
+                                    "content": "http first",
+                                    "type": 1,
+                                    "extra_http_field": "diagnostic",
+                                },
+                                {
+                                    "seq": 2,
+                                    "time": "2026-05-04T08:01:00+08:00",
+                                    "talker": "room@chatroom",
+                                    "talkerName": "Mock Room",
+                                    "senderName": "Bob",
+                                    "content": "http second",
+                                    "type": 1,
+                                },
+                            ]
+                        },
+                        2: {
+                            "messages": [
+                                {
+                                    "seq": 3,
+                                    "time": "2026-05-04T08:02:00+08:00",
+                                    "talker": "room@chatroom",
+                                    "senderName": "Carol",
+                                    "content": "http third",
+                                    "type": 1,
+                                }
+                            ]
+                        },
+                    }
+                    return pages[offset]
+                raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+            with mock.patch.object(wechat2obsidian, "provider_http_get_json", side_effect=fake_http):
+                code = wechat2obsidian.main([
+                    "import-wechat",
+                    "--provider",
+                    "wechat-decrypt",
+                    "--base-url",
+                    "http://127.0.0.1:5678",
+                    "--chat-id",
+                    "room@chatroom",
+                    "--page-size",
+                    "2",
+                    "--max-messages",
+                    "5",
+                    "--vault",
+                    str(vault),
+                    "--folder",
+                    "WeChat",
+                ])
+            self.assertEqual(code, 0)
+
+            manifest = json.loads((vault / "WeChat" / "Mock Room" / "_wechat_import_manifest.json").read_text())
+            self.assertEqual(manifest["provider"], "wechat-decrypt")
+            self.assertEqual(manifest["message_count"], 3)
+            self.assertEqual(manifest["pages_fetched"], 2)
+            self.assertEqual(manifest["resolved_session"]["display_name"], "Mock Room")
+            self.assertIn("extra_http_field", manifest["raw_debug"]["unknown_message_keys"])
+            text = (vault / "WeChat" / "Mock Room" / "2026-05" / "2026-05-04.md").read_text(encoding="utf-8")
+            self.assertIn("http first", text)
+
+    def test_provider_doctor_reports_wechat_decrypt_unreachable(self):
+        def fake_http(_base_url, _endpoint, _params):
+            raise urllib.error.URLError("connection refused")
+
+        with mock.patch.object(wechat2obsidian, "provider_http_get_json", side_effect=fake_http):
+            stdout = io.StringIO()
+            with mock.patch("sys.stdout", stdout):
+                code = wechat2obsidian.main([
+                    "provider-doctor",
+                    "--provider",
+                    "wechat-decrypt",
+                    "--base-url",
+                    "http://127.0.0.1:5678",
+                    "--json",
+                ])
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload[0]["ok"])
+        self.assertEqual(payload[0]["provider"], "wechat-decrypt")
+        self.assertIn("Start wechat-decrypt", payload[0]["detail"])
+
+    def test_wechat_mcp_macos_doctor_marks_detected_as_not_supported(self):
+        provider = wechat2obsidian.get_wechat_providers()["wechat-mcp-macos"]
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            config = home / ".wechat-mcp" / "config.json"
+            config.parent.mkdir()
+            config.write_text("{}", encoding="utf-8")
+
+            with mock.patch.object(wechat2obsidian.shutil, "which", return_value="/usr/local/bin/wechat-mcp-macos"):
+                with mock.patch.object(wechat2obsidian.Path, "home", return_value=home):
+                    row = provider.doctor(object())
+
+        self.assertFalse(row["ok"])
+        self.assertEqual(row["provider"], "wechat-mcp-macos")
+        self.assertIn("direct stdio MCP import is not implemented", row["detail"])
 
 
 if __name__ == "__main__":

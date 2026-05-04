@@ -4,7 +4,8 @@
 
 这个仓库不是一个单纯的备份脚本，而是一个面向个人知识管理的导入桥：
 
-- 优先用 `jackwener/wx-cli` 读取本地微信会话并导入 Obsidian。
+- 通过可插拔 provider 读取本地微信会话，统一导入 Obsidian。
+- 默认仍用 `jackwener/wx-cli`；也可以接入 `wechat-decrypt` HTTP 服务或探测 `wechat-mcp-macos`。
 - 如果 `wx-cli` 获取不到，可以用本地 `wechat-cli-pkg.tar.gz` 解压出来的 `wechat-cli` 二进制。
 - 仍支持从 WeFlow 导出的 JSON 或 WeFlow 本地 HTTP API 导入 Obsidian。
 - 在没有 WeFlow 的情况下，直接处理 macOS 微信 4.x 本地数据库，解密后导出指定聊天。
@@ -34,7 +35,7 @@
 
 ```text
 微信
-  -> wx-cli / 本地 wechat-cli 包 / WeFlow
+  -> wx-cli / wechat-decrypt / wechat-mcp-macos / 本地 wechat-cli 包 / WeFlow
   -> wechat2obsidian.py
   -> Obsidian vault 里的 Markdown + attachments
   -> Obsidian 搜索、标签、反链、图谱、Dataview 等能力
@@ -66,11 +67,13 @@
 
 ## 导入方式
 
-不是只能使用 WeFlow。现在推荐优先用 `jackwener/wx-cli`，它直接从本机微信查询聊天记录，仓库再把结果写入 Obsidian。
+不是只能使用 WeFlow。现在推荐先用通用 provider 入口选择读取后端，再把结果统一写入 Obsidian。
 
 | 方式 | 推荐度 | 适合场景 | 说明 |
 | --- | --- | --- | --- |
-| wx-cli | 首选 | 日常同步、文件传输助手、群聊/私聊 | `jackwener/wx-cli` 负责读取微信记录，本仓库负责导入 Obsidian |
+| wx-cli provider | 默认 | 日常同步、文件传输助手、群聊/私聊 | `jackwener/wx-cli` 负责读取微信记录，本仓库负责导入 Obsidian |
+| wechat-decrypt provider | 优先备用 | 微信 4.x、本地数据库解密、需要 HTTP/MCP 能力 | 启动 `wechat-decrypt` 的本地服务后，通过 HTTP provider 导入 |
+| wechat-mcp-macos provider | 探测中 | macOS MCP 生态 | 当前先做安装/config/ready 探测；稳定 stdio 包装后再作为导入后端 |
 | 本地 wechat-cli 包 | 备用 | `wx-cli` 装不上或获取不到时 | 使用你给的 `wechat-cli-pkg.tar.gz` 解压后的二进制 |
 | WeFlow API / JSON | 兼容 | 已经在用 WeFlow 的场景 | 继续支持，但不再是第一推荐 |
 | 直接解微信本地库 | 最后兜底 | 需要底层控制 | 需要 Frida 抓 key、解密 DB，步骤更多 |
@@ -78,10 +81,58 @@
 推荐顺序：
 
 ```text
-wx-cli -> 本地 wechat-cli 包 -> WeFlow API/JSON -> 直接解微信本地库
+wx-cli provider -> wechat-decrypt provider -> 本地 wechat-cli 包 -> WeFlow API/JSON -> 直接解微信本地库
 ```
 
-### 路线 A：wx-cli 导入，推荐
+不建议把 PyWxDump、已移除的 `sjzar/chatlog` 原仓库或偏 Windows 的 `chatlog_alpha` 作为默认依赖；这些项目可能存在兼容、维护或合规风险。WDecipher 当前明确不支持 macOS，也不纳入默认路线。
+
+### 通用 provider 入口，推荐
+
+查看当前可用后端：
+
+```bash
+python3 scripts/wechat2obsidian.py providers
+```
+
+查看某个后端的修复提示：
+
+```bash
+python3 scripts/wechat2obsidian.py provider-doctor --provider wechat-decrypt \
+  --base-url http://127.0.0.1:5678
+```
+
+用默认 wx-cli provider 导入文件传输助手：
+
+```bash
+python3 scripts/wechat2obsidian.py import-wechat \
+  --provider wx-cli \
+  --chat-id filehelper \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "文件传输助手" \
+  --page-size 500 \
+  --max-messages 20000
+```
+
+用 `wechat-decrypt` provider 导入：
+
+```bash
+# 先在 wechat-decrypt 仓库启动本地服务，默认监听 http://127.0.0.1:5678
+python3 main.py
+
+python3 scripts/wechat2obsidian.py import-wechat \
+  --provider wechat-decrypt \
+  --base-url http://127.0.0.1:5678 \
+  --chat-id "1234567890@chatroom" \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --page-size 500 \
+  --max-messages 50000
+```
+
+`import-wechat` 和旧的 `import-wx-cli` 使用同一套 Markdown 渲染、附件处理、分页、去重和 manifest 审计字段。默认不会保存 provider 原始响应；只有显式传 `--raw-output` 时，才会把本地 raw response 保存到导入目录，便于排查。
+
+### 路线 A：wx-cli 导入，默认 provider
 
 安装并初始化 `jackwener/wx-cli`：
 
@@ -340,8 +391,24 @@ docs/Obsidian-微信资料库配置.md
 # 检查环境
 python3 scripts/wechat2obsidian.py doctor
 
+# 列出可插拔微信读取后端
+python3 scripts/wechat2obsidian.py providers
+
+# 检查某个 provider
+python3 scripts/wechat2obsidian.py provider-doctor --provider wx-cli
+
 # 列 wx-cli 会话
 python3 scripts/wechat2obsidian.py wx-sessions --limit 100
+
+# 通用 provider 导入入口
+python3 scripts/wechat2obsidian.py import-wechat \
+  --provider wx-cli \
+  --chat-id filehelper \
+  --vault ~/Documents/Obsidian\ Vault \
+  --folder "微信渠道" \
+  --subfolder "文件传输助手" \
+  --page-size 500 \
+  --max-messages 20000
 
 # 从 wx-cli 导入文件传输助手
 python3 scripts/wechat2obsidian.py import-wx-cli \
