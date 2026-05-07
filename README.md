@@ -355,6 +355,45 @@ python3 scripts/wechat2obsidian.py export-chat \
   --with-senders
 ```
 
+### 路线 F：模块化工具链 + 自动化
+
+如果你要管理几百个群、想要增量更新、需要按类型分类和去重，路线 E 的一站式 CLI 不够用。本仓库另外提供了一套**模块化脚本**（基于 [Jane-xiaoer/wechat-to-obsidian](https://github.com/Jane-xiaoer/wechat-to-obsidian) 扩展），每个脚本职责单一，组合使用：
+
+| 脚本 | 来源 | 职责 |
+| --- | --- | --- |
+| `scripts/extract_key.py` | upstream | Frida hook `CCKeyDerivationPBKDF` 抓 SQLCipher 密钥 |
+| `scripts/decrypt_db.py` | upstream | AES-256-CBC 按页解密 SQLCipher v4 数据库 |
+| `scripts/export_chat.py` | upstream | 单会话导出 → Markdown 日报 + 附件 |
+| `scripts/list_chats.py` | 本仓库 | 跨多个 message DB 列出所有会话，附真实联系人/群名 |
+| `scripts/batch_export.py` | 本仓库 | 批量导出，支持 `--top N` / `--skip-existing` / 容错 |
+| `scripts/import_real_files.py` | 本仓库 | 把 `msg/file/` `msg/video/` 真实文档按月份 + 类型双视图入库（硬链接，不占额外空间） |
+| `scripts/dedup_attachments.py` | 本仓库 | SHA-256 找重复附件，可选择硬链接合并 |
+| `scripts/dedup_msgfile.py` | 本仓库 | 清理微信原始 `msg/file/` 内的真实重复文件 |
+| `scripts/categorize_attachments.py` | 本仓库 | 按文件类型生成 `_by_type/` 软链接视图 |
+| `scripts/cleanup_cache.py` | 本仓库 | 清理 `cache/` 目录的老月份缓存 |
+
+#### 一键启动
+
+```bash
+# 1. 抓密钥（一次性，登录后点开你想导出的所有会话）
+./run_capture_key.sh
+
+# 2. 增量更新（解密 + 列表 + 批量导出 + 真实文件入库）
+./update.sh
+```
+
+`update.sh` 支持环境变量自定义：
+
+```bash
+WX_USER_WXID=wxid_xxx_xxxx \
+VAULT="$HOME/Documents/MyVault" \
+./update.sh
+```
+
+#### 自动化（macOS launchd 每周自动跑）
+
+详见 [`USAGE.md`](USAGE.md)。
+
 ## Obsidian 里怎么看
 
 导入完成后，打开你的 Obsidian vault：
