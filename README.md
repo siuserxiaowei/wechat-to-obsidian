@@ -1,5 +1,18 @@
 # WeChat Obsidian Bridge
 
+<!-- SIUSER-SEO-INTRO:START -->
+
+## 项目介绍 / Project Introduction
+
+**中文介绍**：微信 Obsidian Bridge，把微信和 WeFlow 的聊天记录、链接、图片和文件导入 Obsidian Markdown 知识库。
+
+**English**: A WeChat Obsidian bridge that imports WeChat and WeFlow chat records, links, images, and files into an Obsidian Markdown vault.
+
+**SEO 关键词 / SEO Keywords**: WeChat, Obsidian, Markdown, PKM, chat export, 知识库
+
+<!-- SIUSER-SEO-INTRO:END -->
+
+
 > 微信 Obsidian 桥：把微信里的聊天记录、文件传输助手、链接、图片、语音、视频和学习资料导入到 Obsidian vault，变成可搜索、可链接、可长期沉淀的 Markdown 知识库。
 
 这个仓库不是一个单纯的备份脚本，而是一个面向个人知识管理的导入桥：
@@ -590,3 +603,17 @@ python3 scripts/group_daily_pipeline.py --config configs/group_daily.json --date
 - `ILoveBingLu/CipherTalk`
 
 详细说明见 `NOTICE` 和 `references/upstream-projects.md`。
+
+<!-- SIUSER-CONTACT:START -->
+
+## 联系我 / Contact
+
+想交流 AI 工具、内容自动化、SEO、私域增长或项目合作，可以扫码加我微信。
+
+For collaboration on AI tools, content automation, SEO, private-domain growth, or product experiments, scan the WeChat QR code below.
+
+<img src="https://raw.githubusercontent.com/siuserxiaowei/siuserxiaowei/main/assets/contact/wechat-qrcode.jpg" width="180" alt="WeChat QR code / 微信二维码" />
+
+**关键词 / Keywords**: WeChat, Obsidian, Markdown, PKM, AI tools, AI automation, GitHub Pages, SEO
+
+<!-- SIUSER-CONTACT:END -->
