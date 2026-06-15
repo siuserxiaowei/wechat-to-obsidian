@@ -1,5 +1,74 @@
 # WeChat Obsidian Bridge
 
+<!-- SIUSER-REPO-GUIDE:START -->
+## Repository Guide
+
+### What This Repository Does
+
+微信到 Obsidian 桥接工具：把微信资料沉淀为 Markdown、摘要和个人知识库素材。
+
+English summary: WeChat-to-Obsidian bridge for turning WeChat materials into Markdown, summaries, and PKM assets.
+
+### Online Entry Points
+
+- GitHub repository: https://github.com/siuserxiaowei/wechat-to-obsidian
+- Live / GitHub Pages: not configured for this repository
+- Default branch: `main`
+- Primary language: `Python`
+- Topics: `knowledge-management`, `markdown`, `obsidian`, `wechat`, `weflow`
+
+### How To Read / Learn This Repository
+
+1. 先读本 README，确认项目目标、在线入口和本地运行方式。
+2. 优先查看 `SKILL.md`、`README.md` 和示例脚本，理解这个 skill 解决什么问题。
+3. 如果要修改内容，先小范围改动，再运行本 README 中的验证命令。
+
+### Clone This Repository
+
+```bash
+git clone https://github.com/siuserxiaowei/wechat-to-obsidian.git
+cd wechat-to-obsidian
+```
+
+### Run Or View Locally
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Repository Map
+
+| Path | Purpose |
+| --- | --- |
+| `README.md` | 项目入口说明，先读这里。 |
+| `SKILL.md` | Skill 的核心说明、触发条件和使用步骤。 |
+| `docs/` | 文档或 GitHub Pages 输出目录。 |
+| `assets/` | 图片、样式、字体或页面资源。 |
+| `scripts/` | 构建、同步、生成或维护脚本。 |
+| `tests/` | 测试用例或验证脚本。 |
+| `LICENSE` | 项目文件。 |
+| `NOTICE` | 项目文件。 |
+| `USAGE.md` | 项目文件。 |
+| `agents/` | 项目目录。 |
+| `configs/` | 项目目录。 |
+| `launchd/` | 项目目录。 |
+
+### Maintenance Notes
+
+- Keep this README in sync when the project purpose, live link, or run commands change.
+- Prefer small, focused commits when changing code, data, or generated pages.
+- Run the relevant build or validation command before publishing changes.
+- If this is a generated/static archive, update the source data first, then regenerate the public files.
+
+### Privacy And Safety
+
+- Do not commit API keys, tokens, passwords, cookies, private URLs, or internal account data.
+- Keep private source material out of public GitHub Pages output unless it has been explicitly cleared for publication.
+- When in doubt, run a quick secret scan such as `rg -n "token|secret|password|access_key|authorization"` before pushing.
+<!-- SIUSER-REPO-GUIDE:END -->
+
 <!-- SIUSER-SEO-INTRO:START -->
 
 ## 项目介绍 / Project Introduction
@@ -11,7 +80,6 @@
 **SEO 关键词 / SEO Keywords**: WeChat, Obsidian, Markdown, PKM, chat export, 知识库
 
 <!-- SIUSER-SEO-INTRO:END -->
-
 
 > 微信 Obsidian 桥：把微信里的聊天记录、文件传输助手、链接、图片、语音、视频和学习资料导入到 Obsidian vault，变成可搜索、可链接、可长期沉淀的 Markdown 知识库。
 
