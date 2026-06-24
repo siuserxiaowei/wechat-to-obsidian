@@ -1,73 +1,79 @@
 # WeChat Obsidian Bridge
 
 <!-- SIUSER-REPO-GUIDE:START -->
-## Repository Guide
+## 项目介绍 / Project Introduction
 
-### What This Repository Does
-
+### 中文
 微信到 Obsidian 桥接工具：把微信资料沉淀为 Markdown、摘要和个人知识库素材。
 
-English summary: WeChat-to-Obsidian bridge for turning WeChat materials into Markdown, summaries, and PKM assets.
+### English
+WeChat-to-Obsidian bridge for turning WeChat materials into Markdown, summaries, and PKM assets.
 
-### Online Entry Points
+## 使用方式 / Usage
 
-- GitHub repository: https://github.com/siuserxiaowei/wechat-to-obsidian
-- Live / GitHub Pages: not configured for this repository
-- Default branch: `main`
-- Primary language: `Python`
-- Topics: `knowledge-management`, `markdown`, `obsidian`, `wechat`, `weflow`
+### 中文
+1. 先阅读 `SKILL.md`，确认触发场景、输入要求和执行步骤。
+2. 按仓库 README 的安装方式复制或安装 Skill。
+3. 在真实任务中调用前，先用示例或测试脚本做一次小范围验证。
 
-### How To Read / Learn This Repository
+### English
+1. Read `SKILL.md` first to understand triggers, inputs, and workflow steps.
+2. Install or copy the skill according to this README.
+3. Before using it on real work, run a small example or validation script.
 
-1. 先读本 README，确认项目目标、在线入口和本地运行方式。
-2. 优先查看 `SKILL.md`、`README.md` 和示例脚本，理解这个 skill 解决什么问题。
-3. 如果要修改内容，先小范围改动，再运行本 README 中的验证命令。
+## 入口与元信息 / Entry Points & Metadata
 
-### Clone This Repository
+- GitHub 仓库 / Repository: https://github.com/siuserxiaowei/wechat-to-obsidian
+- 默认分支 / Default branch: `main`
+- 主要语言 / Primary language: `Python`
+- 可见性 / Visibility: `public`
+- 仓库类型 / Repository type: `source`
+- Topics / 主题：`knowledge-management`, `markdown`, `obsidian`, `wechat`, `weflow`
+
+## 本地运行 / Local Run
 
 ```bash
 git clone https://github.com/siuserxiaowei/wechat-to-obsidian.git
 cd wechat-to-obsidian
-```
-
-### Run Or View Locally
-
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python3 -m pytest
 ```
 
-### Repository Map
+## 仓库结构 / Repository Map
 
-| Path | Purpose |
-| --- | --- |
-| `README.md` | 项目入口说明，先读这里。 |
-| `SKILL.md` | Skill 的核心说明、触发条件和使用步骤。 |
-| `docs/` | 文档或 GitHub Pages 输出目录。 |
-| `assets/` | 图片、样式、字体或页面资源。 |
-| `scripts/` | 构建、同步、生成或维护脚本。 |
-| `tests/` | 测试用例或验证脚本。 |
-| `LICENSE` | 项目文件。 |
-| `NOTICE` | 项目文件。 |
-| `USAGE.md` | 项目文件。 |
-| `agents/` | 项目目录。 |
-| `configs/` | 项目目录。 |
-| `launchd/` | 项目目录。 |
+| 路径 / Path | 中文说明 | English |
+| --- | --- | --- |
+| `README.md` | 项目入口说明，先读这里。 | Main project entry point and orientation. |
+| `SKILL.md` | Skill 的核心说明、触发条件和执行步骤。 | Core skill instructions, trigger rules, and workflow. |
+| `requirements.txt` | Python 依赖列表。 | Python dependency list. |
+| `assets` | 图片、样式、数据等资源。 | Images, styles, data, and other assets. |
+| `docs` | 文档或 GitHub Pages 输出目录。 | Documentation or GitHub Pages output. |
+| `scripts` | 构建、同步、生成或维护脚本。 | Build, sync, generation, or maintenance scripts. |
+| `tests` | 测试用例与验证脚本。 | Tests and validation scripts. |
+| `LICENSE` | 许可证文件。 | License file. |
+| `agents` | Agent 配置或平台适配文件。 | Agent configuration or platform adapters. |
+| `configs` | 项目文件或目录。 | Project file or directory. |
+| `launchd` | 项目文件或目录。 | Project file or directory. |
+| `references` | 参考资料、规范或补充说明。 | References, specifications, or supporting notes. |
 
-### Maintenance Notes
+## 维护备注 / Maintenance Notes
 
-- Keep this README in sync when the project purpose, live link, or run commands change.
-- Prefer small, focused commits when changing code, data, or generated pages.
-- Run the relevant build or validation command before publishing changes.
-- If this is a generated/static archive, update the source data first, then regenerate the public files.
+- 中文：当项目目标、在线入口、运行命令或目录结构变化时，同步更新本说明。
+- English: Keep this guide updated when the project purpose, live link, run commands, or structure changes.
+- 中文：修改代码、数据或生成页面后，优先运行相关构建、测试或校验命令。
+- English: After changing code, data, or generated pages, run the relevant build, test, or validation command.
 
-### Privacy And Safety
+## 安全与隐私 / Safety & Privacy
 
-- Do not commit API keys, tokens, passwords, cookies, private URLs, or internal account data.
-- Keep private source material out of public GitHub Pages output unless it has been explicitly cleared for publication.
-- When in doubt, run a quick secret scan such as `rg -n "token|secret|password|access_key|authorization"` before pushing.
+- 中文：不要提交 API key、token、密码、cookie、私有链接或内部账号资料。
+- English: Do not commit API keys, tokens, passwords, cookies, private URLs, or internal account data.
+- 中文：公开 GitHub Pages 前，确认资料已脱敏并允许公开。
+- English: Before publishing GitHub Pages output, confirm the material is redacted and cleared for public release.
 <!-- SIUSER-REPO-GUIDE:END -->
+
+
 
 <!-- SIUSER-SEO-INTRO:START -->
 
